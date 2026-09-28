@@ -7,7 +7,7 @@ use cake::{Fuse, stacktrace};
 use crate::{
     declare_module, hlt_loop,
     interrupts::KernelInterrupt,
-    memory::{self, allocator},
+    memory::{self},
     mp::{self, LAPIC, lapic::icr::IPIDestination},
     print, println,
     serial::{self, interface::SERIAL_PORT_NUM, raw::SerialPort},
@@ -44,15 +44,6 @@ pub fn panic_extended_info(pi: &PanicInfo) {
     }
     println!();
     println!("{}", pi.message());
-    if memory::allocator::ALLOCATOR.is_initialized() {
-        println!("=== HEAP STATE ===");
-        println!("Main heap:");
-        // Safety: We are in a panic, so the allocator should be completely halted
-        let alloc = unsafe { allocator::ALLOCATOR.force_get().unwrap() };
-        alloc.print_state();
-    } else {
-        println!("Heap allocator not initialized");
-    }
 
     println!("=== STACK TRACE ===");
     panic_stacktrace();

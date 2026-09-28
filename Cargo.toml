@@ -9,7 +9,6 @@ default-run = "boot"
 # yes i stole the name for nmm from redox
 members = [
     "cake",
-    "kalloc",
     "kbuild",
     "kernel",
     "kproc",
@@ -17,7 +16,7 @@ members = [
     "kserial",
     "kserial/kserial_derive",
     "kelp",
-    "tmm",
+    "tmm/kalloc",
 ]
 
 [build-dependencies]

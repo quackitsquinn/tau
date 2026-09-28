@@ -20,7 +20,6 @@ use tmm::{
     },
 };
 
-pub mod allocator;
 pub mod elf_req_data;
 pub mod req_data;
 

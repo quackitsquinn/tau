@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cake = { path = "../cake" }
+cake = { path = "../../cake" }
+tmm = { path = "..", features = ["x86_64"] }
+arrayvec = { version = "0.7.6", default-features = false }
 
 [profile.test]
 debug = true

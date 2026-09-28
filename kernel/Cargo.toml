@@ -9,26 +9,26 @@ test = false
 bench = false
 
 [dependencies]
-bitflags = "2.5.0"
-lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
-pic8259 = "0.11.0"
-uart_16550 = "0.4.0"
-x86_64 = "0.15.5"
 kproc = { path = "../kproc" }
 kserial = { path = "../kserial", default-features = false }
-kalloc = { path = "../kalloc" }
+cake = { path = "../cake" }
+kelp = { path = "../kelp" }
+tmm = { path = "../tmm", features = ["x86_64"] }
+kalloc = { path = "../tmm/kalloc" }
+
+lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+uart_16550 = "0.4.0"
 thiserror = { version = "2.0.3", default-features = false }
 rustc-demangle = { version = "0.1.24", default-features = false }
-# TODO: Find an alternative to this, because it's now deprecated
 paste = "1.0.15"
+bitflags = "2.5.0"
 arrayvec = { version = "0.7.6", default-features = false }
+pic8259 = "0.11.0"
 acpi = "6.0.1"
-cake = { path = "../cake" }
+x86_64 = "0.15.5"
 raw-cpuid = "11.6.0"
 modular-bitfield = "0.12.0"
-kelp = { path = "../kelp" }
 bitfield = "0.19.3"
-tmm = { path = "../tmm", features = ["x86_64"] }
 
 [lints]
 workspace = true
