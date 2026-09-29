@@ -26,7 +26,7 @@ pub(super) fn init() -> Result<(), Infallible> {
 
     let mut cores = BTreeMap::new();
 
-    for cpu in cpus {
+    for (i, cpu) in cpus.iter().enumerate() {
         info!("Initializing  CPU {} (APIC ID {})", cpu.id, cpu.lapic_id);
         if cpu.id == 0 {
             continue; // Skip BSP

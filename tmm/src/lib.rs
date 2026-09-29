@@ -43,6 +43,7 @@ compile_error!("Only x86_64 architecture is currently supported.");
 
 pub mod arch;
 pub mod bitmap;
+mod corelocal;
 pub mod entry_walker;
 mod init;
 pub mod kernel_map;
