@@ -1,7 +1,7 @@
 //! Address Space Management (ASM) module for nmm.
 
 use core::{
-    cell::RefCell,
+    cell::{Ref, RefCell},
     mem::{self, transmute},
 };
 
@@ -14,6 +14,7 @@ use crate::{
     MapFlags, MemError,
     arch::{self},
     bitmap::{PhysicalMemoryManager, VirtualMemoryManager},
+    corelocal::{CoreLocal, NoDefaultInit},
     paging::{
         Address, AddressExt, FragmentSize, Frame, Large, MemoryFragment, Page, PageTable,
         PageTableEntry, PageTableIndex, RecursiveEntryManager, Small,
@@ -29,7 +30,8 @@ mod mounted;
 pub use inactive::InactiveAddressSpace;
 pub use mounted::MountedAddressSpace;
 
-static ADDRESS_SPACE: OnceRwLock<AddressSpace> = OnceRwLock::new();
+static ADDRESS_SPACE: CoreLocal<RefCell<AddressSpace>, NoDefaultInit> =
+    CoreLocal::new(NoDefaultInit);
 static VIRTUAL_MEMORY_MANAGER: OnceMutex<VirtualMemoryManager<'static>> =
     OnceMutex::uninitialized();
 static PHYSICAL_MEMORY_MANAGER: OnceMutex<PhysicalMemoryManager> = OnceMutex::uninitialized();
@@ -94,16 +96,15 @@ impl AddressSpace {
     }
 }
 
-pub(crate) unsafe fn set_active(new_space: AddressSpace) {
-    let mut new_as = Some(new_space);
-    // Try to initialize, if we fail, just overwrite the existing address space.
-    ADDRESS_SPACE.init(|| new_as.take().unwrap());
+pub(crate) unsafe fn set_active(new_space: AddressSpace) -> Result<Option<AddressSpace>, MemError> {
+    let mut new_space = Some(new_space);
+    let ads = ADDRESS_SPACE.get_with_inline(|_cid| RefCell::new(new_space.take().unwrap()));
 
-    if let Some(new_as) = new_as {
-        // If we failed to initialize, we need to overwrite the existing address space.
-        let mut old_as = ADDRESS_SPACE.write();
-        *old_as = new_as;
+    if let Some(new_space) = new_space {
+        return Ok(Some(ads.replace(new_space)));
     }
+
+    Ok(None)
 }
 
 /// Sets the global physical memory manager. This function should only be called once during system initialization.
@@ -114,8 +115,10 @@ pub(crate) fn set_pmm(pmm: PhysicalMemoryManager) -> bool {
     pmm.is_none()
 }
 
-pub(crate) fn active() -> OnceRwReadGuard<'static, AddressSpace> {
-    ADDRESS_SPACE.read()
+pub(crate) fn active() -> Ref<'static, AddressSpace> {
+    ADDRESS_SPACE
+        .get_with_inline(|cid| panic!("Active address space not set for core {}", cid))
+        .borrow()
 }
 
 pub(crate) fn pmm() -> OnceMutexGuard<'static, PhysicalMemoryManager> {
