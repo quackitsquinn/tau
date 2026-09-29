@@ -1,5 +1,6 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use spin::Once;
 #[cfg(all(target_arch = "x86_64", not(test)))]
 use x86_64::registers::model_specific::Msr;
 
@@ -14,6 +15,17 @@ pub unsafe fn init_core_id() -> usize {
     let our_id = CURRENT_CORE_ID.fetch_add(1, Ordering::SeqCst);
     unsafe { write_core_id(our_id) };
     our_id
+}
+
+static CORE_COUNT: Once<usize> = Once::new();
+
+pub unsafe fn set_core_count(count: usize) {
+    CORE_COUNT.call_once(|| count);
+}
+
+/// Returns the number of cores in the system. Returns `None` if the core count has not been set yet.
+pub fn core_count() -> Option<usize> {
+    CORE_COUNT.get().copied()
 }
 
 #[cfg(all(target_arch = "x86_64", not(test)))]

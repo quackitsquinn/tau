@@ -13,7 +13,7 @@ mod owned;
 mod resource;
 pub mod securand;
 pub mod stacktrace;
-pub use id::{core_id, init_core_id};
+pub use id::{core_count, core_id, init_core_id, set_core_count};
 
 /* Crate Exports */
 pub use self::limine_request::{

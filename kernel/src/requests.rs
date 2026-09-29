@@ -3,6 +3,7 @@ use core::convert::Infallible;
 
 use cake::limine::BaseRevision;
 use cake::limine::{paging::Mode, request::*, response::ExecutableAddressResponse};
+use cake::log::info;
 use cake::{LimineRequest, Once};
 use tmm::paging::{Address, VirtAddr};
 
@@ -74,7 +75,12 @@ fn init() -> Result<(), Infallible> {
 
     FRAMEBUFFER.init(FramebufferInfo::new);
 
-    MP_INFO.init(ApplicationCores::new);
+    MP_INFO.init(|i| {
+        let n_cores = i.cpus().len();
+        info!("Bootloader provided {} cores", n_cores);
+        unsafe { cake::set_core_count(n_cores) };
+        ApplicationCores::new(i)
+    });
 
     let exec_addr = EXECUTABLE_ADDRESS_REQUEST.get_response().unwrap();
     EXECUTABLE_ADDRESS.call_once(|| exec_addr);
