@@ -42,12 +42,6 @@ where
         })
     }
 
-    /// Returns a reference to the core-local data for the current core.
-    /// If the data has not been initialized for the current core, it will be initialized using the provided initializer.
-    pub fn get(&self) -> &T {
-        self.get_with(&self.initializer)
-    }
-
     /// Returns a reference to the core-local data for the current core, using the provided initializer.
     /// If the data has not been initialized for the current core, it will be initialized using the provided initializer.
     pub fn get_with<O>(&self, initializer: &O) -> &T
@@ -101,9 +95,22 @@ where
     }
 }
 
-pub trait CoreLocalInitializer<T> {
+impl<T, I> CoreLocal<T, I>
+where
+    I: HasDefaultInit<T>,
+{
+    /// Returns a reference to the core-local data for the current core, using the default initializer.
+    /// If the data has not been initialized for the current core, it will be initialized using the default initializer.
+    pub fn get(&self) -> &T {
+        self.get_with(&self.initializer)
+    }
+}
+
+pub impl(crate) trait CoreLocalInitializer<T> {
     fn init(&self, core_id: usize) -> T;
 }
+
+pub impl(crate) trait HasDefaultInit<T>: CoreLocalInitializer<T> {}
 
 pub struct CloneInit<T>
 where
@@ -118,6 +125,8 @@ where
 {
     CloneInit { value }
 }
+
+impl<T> HasDefaultInit<T> for CloneInit<T> where T: Clone {}
 
 impl<T> CoreLocalInitializer<T> for CloneInit<T>
 where
@@ -142,6 +151,8 @@ where
     FnInit { f }
 }
 
+impl<T, F> HasDefaultInit<T> for FnInit<T, F> where F: Fn(usize) -> T {}
+
 impl<T, F> CoreLocalInitializer<T> for FnInit<T, F>
 where
     F: Fn(usize) -> T,
@@ -165,6 +176,8 @@ where
     CopyInit { value }
 }
 
+impl<T> HasDefaultInit<T> for CopyInit<T> where T: Copy {}
+
 impl<T> CoreLocalInitializer<T> for CopyInit<T>
 where
     T: Copy,
@@ -176,3 +189,15 @@ where
 
 unsafe impl<T, I: Send> Send for CoreLocal<T, I> {}
 unsafe impl<T, I: Sync> Sync for CoreLocal<T, I> {}
+
+pub struct NoDefaultInit;
+
+pub const fn no_default_init() -> NoDefaultInit {
+    NoDefaultInit
+}
+
+impl<T> CoreLocalInitializer<T> for NoDefaultInit {
+    fn init(&self, _core_id: usize) -> T {
+        panic!("CoreLocal value not initialized for this core");
+    }
+}
