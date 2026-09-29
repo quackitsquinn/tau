@@ -19,6 +19,11 @@ impl_ops!(blanket VirtAddr);
 impl VirtAddr {
     /// The start of the higher half in virtual address space.
     pub const HIGHER_HALF_OFFSET: Self = arch::HIGHER_HALF_START;
+
+    /// Returns true if the virtual address is null (0).
+    pub const fn is_null(&self) -> bool {
+        self.0 == 0
+    }
 }
 
 impl Primitive for VirtAddr {}

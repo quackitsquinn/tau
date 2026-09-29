@@ -11,26 +11,21 @@ pub fn derive_should_trace_target(expr: LitStr) -> proc_macro::TokenStream {
                 .map(str::trim)
                 .map(str::to_lowercase)
                 .filter(|s| !s.is_empty())
-                .map(|s| syn::LitStr::new(&s, proc_macro2::Span::call_site()))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
 
-    let match_arms = log_filters.iter().map(|filter| {
-        quote::quote! {
-            #filter => true,
-        }
-    });
+    if log_filters.contains(&"all".to_string()) {
+        return quote::quote! { true }.into();
+    }
 
     let _ = add_trace_target(&expr);
 
-    quote::quote! {
-        match #expr {
-            #(#match_arms)*
-            _ => false,
-        }
+    if log_filters.contains(&expr.value().to_lowercase()) {
+        quote::quote! { true }.into()
+    } else {
+        quote::quote! { false }.into()
     }
-    .into()
 }
 
 fn add_trace_target(expr: &LitStr) -> std::io::Result<()> {
@@ -52,6 +47,7 @@ fn add_trace_target(expr: &LitStr) -> std::io::Result<()> {
     }
 
     writeln!(list, "{}", target)?;
+    list.flush()?;
     rustix::fs::flock(&list, FlockOperation::Unlock)?;
 
     Ok(())
