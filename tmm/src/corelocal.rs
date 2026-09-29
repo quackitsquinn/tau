@@ -54,30 +54,39 @@ where
         })
     }
 
+    fn get_current_core_cell(&self) -> &Option<T> {
+        let core_id = cake::core_id();
+        if core_id == 0 {
+            // SAFETY: We are the only thread running on the bootstrap core.
+            unsafe { &*self.bootstrap.get() }
+        } else {
+            let cores = self.get_cores();
+            let cell = &cores[core_id as usize - 1];
+            // SAFETY: We are the only thread running on this core.
+            unsafe { &*cell.get() }
+        }
+    }
+
+    fn get_current_core_cell_mut(&self) -> &mut Option<T> {
+        let core_id = cake::core_id();
+        if core_id == 0 {
+            // SAFETY: We are the only thread running on the bootstrap core.
+            unsafe { &mut *self.bootstrap.get() }
+        } else {
+            let cores = self.get_cores();
+            let cell = &cores[core_id as usize - 1];
+            // SAFETY: We are the only thread running on this core.
+            unsafe { &mut *cell.get() }
+        }
+    }
+
     /// Returns a reference to the core-local data for the current core, using the provided initializer.
     /// If the data has not been initialized for the current core, it will be initialized using the provided initializer.
     pub fn get_with<O>(&self, initializer: &O) -> &T
     where
         O: CoreLocalInitializer<T>,
     {
-        let core_id = cake::core_id();
-        if core_id == 0 {
-            // SAFETY: We are the only thread running on the bootstrap core.
-            let bootstrap = unsafe { &mut *self.bootstrap.get() };
-            if bootstrap.is_none() {
-                *bootstrap = Some(initializer.init(core_id as usize));
-            }
-            bootstrap.as_ref().unwrap()
-        } else {
-            let cores = self.get_cores();
-            let cell = &cores[core_id as usize - 1];
-            // SAFETY: We are the only thread running on this core.
-            let value = unsafe { &mut *cell.get() };
-            if value.is_none() {
-                *value = Some(initializer.init(core_id as usize));
-            }
-            value.as_ref().unwrap()
-        }
+        self.get_with_inline(|core_id| initializer.init(core_id))
     }
 
     /// Returns a reference to the core-local data for the current core, using the provided initializer.
@@ -86,41 +95,25 @@ where
     where
         O: FnOnce(usize) -> T,
     {
-        let core_id = cake::core_id();
-        if core_id == 0 {
-            // SAFETY: We are the only thread running on the bootstrap core.
-            let bootstrap = unsafe { &mut *self.bootstrap.get() };
-            if bootstrap.is_none() {
-                *bootstrap = Some(initializer(core_id as usize));
-            }
-            bootstrap.as_ref().unwrap()
-        } else {
-            let cores = self.get_cores();
-            let cell = &cores[core_id as usize - 1];
-            // SAFETY: We are the only thread running on this core.
-            let value = unsafe { &mut *cell.get() };
-            if value.is_none() {
-                *value = Some(initializer(core_id as usize));
-            }
-            value.as_ref().unwrap()
+        let curr_cell = self.get_current_core_cell_mut();
+        if curr_cell.is_none() {
+            let core_id = cake::core_id();
+            let new_value = initializer(core_id as usize);
+            *curr_cell = Some(new_value);
         }
+
+        self.get_current_core_cell().as_ref().unwrap()
     }
 
     /// Returns an `Option` containing a reference to the core-local data for the current core, if it has been initialized.
     /// If the data has not been initialized for the current core, it will return `None`.`
     pub fn try_get(&self) -> Option<&T> {
-        let core_id = cake::core_id();
-        if core_id == 0 {
-            // SAFETY: We are the only thread running on the bootstrap core.
-            let bootstrap = unsafe { &mut *self.bootstrap.get() };
-            bootstrap.as_ref()
-        } else {
-            let cores = self.get_cores();
-            let cell = &cores[core_id as usize - 1];
-            // SAFETY: We are the only thread running on this core.
-            let value = unsafe { &mut *cell.get() };
-            value.as_ref()
-        }
+        self.get_current_core_cell().as_ref()
+    }
+
+    /// Returns `true` if the core-local data for the current core has been initialized, `false` otherwise.
+    pub fn is_init(&self) -> bool {
+        self.get_current_core_cell().is_some()
     }
 }
 
