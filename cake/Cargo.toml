@@ -17,6 +17,7 @@ rand_core = "0.10.1"
 rs_sha512_256 = "0.1.2"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 kproc = { path = "../kproc", default-features = false }
+x86_64 = { version = "0.15.5" }
 
 # This is so that `rust-analyzer` doesn't crash and burn
 [target.'cfg(unix)'.dev-dependencies]

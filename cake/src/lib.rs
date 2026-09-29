@@ -4,6 +4,7 @@
 #![feature(debug_closure_helpers)]
 
 mod fuse;
+pub mod id;
 mod limine_request;
 mod module;
 mod oncemut;
@@ -12,6 +13,7 @@ mod owned;
 mod resource;
 pub mod securand;
 pub mod stacktrace;
+pub use id::{core_id, init_core_id};
 
 /* Crate Exports */
 pub use self::limine_request::{
@@ -102,24 +104,6 @@ macro_rules! trace_disabled {
             $crate::log::trace!(target: $target, $($rest)*);
         }
     };
-}
-
-/// Gets the current core ID.
-// TODO: Don't use the initial local APIC ID because it may be reconfigured.. I don't know if CpuId can do tht
-#[allow(unreachable_code)]
-pub fn core_id() -> u64 {
-    #[cfg(all(target_arch = "x86_64", not(test)))]
-    {
-        use raw_cpuid::CpuId;
-        return CpuId::with_cpuid_reader(raw_cpuid::CpuIdReaderNative)
-            .get_feature_info()
-            .map_or(0, |finfo| finfo.initial_local_apic_id() as u64);
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    return 0;
-
-    #[cfg(any(test, feature = "std"))]
-    return std::thread::current().id().as_u64().into();
 }
 
 #[cfg(test)]

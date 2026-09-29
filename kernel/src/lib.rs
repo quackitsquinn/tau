@@ -90,6 +90,7 @@ pub(crate) unsafe fn init_kernel_services() {
     interrupts::MODULE.init();
     get_serial_client().enable_packet_support();
     cake::init_rng();
+    unsafe { cake::init_core_id() };
     memory::MODULE.init();
     gdt::MODULE.init();
     hardware::MODULE.init();

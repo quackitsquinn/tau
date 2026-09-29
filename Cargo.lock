@@ -218,6 +218,7 @@ dependencies = [
  "rs_sha512_256",
  "rustc-demangle",
  "spin 0.10.0",
+ "x86_64",
 ]
 
 [[package]]

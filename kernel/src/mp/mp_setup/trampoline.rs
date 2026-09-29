@@ -36,6 +36,10 @@ extern "C" fn ap_trampoline(cpu: &Cpu, stack_base: u64) -> ! {
     info!("Stack base: {:#x}", stack_base);
     drop(context_lock);
 
+    unsafe {
+        cake::init_core_id();
+    }
+
     // Now we can enter the idle loop.
     IDLE.fetch_add(1, Ordering::AcqRel);
     INIT.fetch_add(1, Ordering::AcqRel);
