@@ -11,7 +11,11 @@ use crate::{
     requests::{MEMORY_MAP, PHYSICAL_MEMORY_OFFSET},
 };
 use alloc::vec::Vec;
-use cake::log::{info, trace};
+use cake::{
+    log::{info, trace},
+    trace_disabled,
+};
+use kalloc::{GlobalAllocator, HeapConfig};
 use tmm::{
     InitConfig, MapFlags, MemError,
     paging::{
@@ -48,9 +52,25 @@ pub fn stack_range() -> MemoryRange<VirtAddr> {
 
 declare_module!("memory", init);
 
+const HEAP_CONFIG: HeapConfig = HeapConfig {
+    initial_heap_size: 16 * 1024 * 1024, // 16 MiB
+    max_heap_size: 256 * 1024 * 1024,    // 256 MiB
+};
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator::new(HEAP_CONFIG);
+
 fn init() -> Result<(), Infallible> {
     let recursive_idx = unsafe { init_tmm().unwrap() };
     map_kernel(recursive_idx).unwrap();
+    info!("Kernel memory mapped successfully");
+    info!("Initializing kernel heap allocator...");
+    assert!(GLOBAL_ALLOCATOR.init().unwrap());
+    info!(
+        "Kernel heap initialized with initial size: {} bytes",
+        HEAP_CONFIG.initial_heap_size
+    );
+    crate::hlt_loop();
     Ok(())
 }
 
@@ -99,14 +119,22 @@ fn map_kernel(recursive_idx: PageTableIndex) -> Result<(), MemError> {
             VirtAddr::from_mut_ptr(f.last_frame).expect("failed to convert frame addr");
         let stack_offset = stack_range.end().as_u64() - old_frame_addr.as_u64();
         let new_frame_addr = new_stack.end() - stack_offset;
+        let new_frame = cake::stacktrace::StackFrame {
+            last_frame: if old_frame_addr.is_null() {
+                ptr::null_mut()
+            } else {
+                new_frame_addr.as_mut_ptr()
+            },
+            instruction_pointer: f.instruction_pointer,
+        };
+        trace_disabled!(
+            "kernel.mem.frameremap",
+            "Remapping frame pointer from {:#x} to {:#x}",
+            old_frame_addr.as_u64(),
+            new_frame.last_frame as u64
+        );
         unsafe {
-            cake::stacktrace::write_frame(
-                current_frame,
-                cake::stacktrace::StackFrame {
-                    last_frame: new_frame_addr.as_mut_ptr(),
-                    instruction_pointer: f.instruction_pointer,
-                },
-            );
+            cake::stacktrace::write_frame(current_frame, new_frame);
         }
 
         current_frame = f.last_frame;
@@ -144,11 +172,6 @@ fn map_kernel(recursive_idx: PageTableIndex) -> Result<(), MemError> {
         }
     }
     info!("Address space switched successfully!");
-
-    let mut test_v = Vec::new_in(HeaplessAllocator::new(MapFlags::WRITABLE));
-    test_v.push(42);
-    drop(test_v);
-    crate::hlt_loop();
 
     Ok(())
 }
@@ -207,8 +230,8 @@ use tmm::kernel_map;
 
 kernel_map! {
     . = (higher_half + 512 GiB),
-    tmm_MANAGED_RANGE = 2 GiB; align 1 GiB,
-    tmm_ZERO_PAGE = Large; align Large,
+    TMM_MANAGED_RANGE = 2 GiB; align 1 GiB,
+    TMM_ZERO_PAGE = Large; align Large,
     KERNEL_HEAP = 16 MiB; align 2 MiB,
     KERNEL_PHYS_MAP = 256 MiB; align 2 MiB,
     KERNEL_REMAP = 256 MiB; align 2 MiB,
