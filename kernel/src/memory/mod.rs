@@ -2,12 +2,12 @@ use core::{
     alloc::Layout,
     arch::asm,
     convert::Infallible,
-    mem,
+    mem::{self, Alignment},
     ptr::{self, addr_of},
 };
 
 use crate::{
-    declare_module,
+    STACK_SIZE, declare_module,
     requests::{MEMORY_MAP, PHYSICAL_MEMORY_OFFSET},
 };
 use alloc::vec::Vec;
@@ -17,7 +17,7 @@ use cake::{
 };
 use kalloc::{GlobalAllocator, HeapConfig};
 use tmm::{
-    InitConfig, MapFlags, MemError,
+    InitConfig, MapFlags, MapSource, MemError,
     paging::{
         Address, AddressExt, MemoryFragment, MemoryRange, PageTable, PageTableEntry,
         PageTableIndex, VirtAddr, asm::InactiveAddressSpace, heapless::HeaplessAllocator,
@@ -62,7 +62,15 @@ static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator::new(HEAP_CONFIG);
 
 fn init() -> Result<(), Infallible> {
     let recursive_idx = unsafe { init_tmm().unwrap() };
-    map_kernel(recursive_idx).unwrap();
+    match map_kernel(recursive_idx) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            panic!("Failed to map kernel: {:?}", e);
+        }
+    }
+}
+
+extern "C" fn exitpoint() -> ! {
     info!("Kernel memory mapped successfully");
     info!("Initializing kernel heap allocator...");
     assert!(GLOBAL_ALLOCATOR.init().unwrap());
@@ -70,13 +78,11 @@ fn init() -> Result<(), Infallible> {
         "Kernel heap initialized with initial size: {} bytes",
         HEAP_CONFIG.initial_heap_size
     );
-    crate::hlt_loop();
-    Ok(())
+    crate::init_stage1()
 }
 
-fn map_kernel(recursive_idx: PageTableIndex) -> Result<(), MemError> {
+fn map_kernel(recursive_idx: PageTableIndex) -> Result<!, MemError> {
     let kernel_range = kernel_range();
-    let stack_range = stack_range();
 
     let new_as = InactiveAddressSpace::new(recursive_idx)?;
     let mut builder = match new_as.try_mount() {
@@ -89,57 +95,29 @@ fn map_kernel(recursive_idx: PageTableIndex) -> Result<(), MemError> {
         }
     };
 
-    info!("reserving {:x} bytes for new stack", stack_range.size());
+    info!("reserving {:x} bytes for new stack", STACK_SIZE);
     let new_stack = tmm::reserve_virtual(
-        Layout::from_size_alignment(stack_range.size() as usize, stack_range.start().alignment())
-            .unwrap(),
+        Layout::from_size_alignment(
+            STACK_SIZE as usize,
+            Alignment::new(STACK_SIZE.next_power_of_two() as usize).unwrap(),
+        )
+        .unwrap(),
     )?;
 
-    assert!(new_stack.size() == stack_range.size());
+    tmm::map(
+        new_stack,
+        MapSource::Anon,
+        MapFlags::WRITABLE,
+        None,
+        &mut (),
+    )?;
 
     info!(
         "Copying kernel mappings with kernel range: {:#x?}",
         kernel_range
     );
     builder.copy_mappings_from_base(kernel_range, None)?;
-    info!(
-        "Copying stack mappings from old stack range: {:#x?} to new stack range: {:#x?}",
-        stack_range, new_stack
-    );
-    builder.copy_mappings_from_base(stack_range, Some(new_stack))?;
     builder.copy_mappings_from_base(map::tmm_managed_range::RANGE, None)?;
-
-    // Something I didn't initially think of: we have to update the frame pointers.
-    // If a panic happens, it will instantly deref unmapped memory and crash.
-
-    let mut current_frame = cake::stacktrace::root_frame();
-    let mut frame = unsafe { cake::stacktrace::read_frame(current_frame) };
-    while let Some(f) = frame {
-        let old_frame_addr =
-            VirtAddr::from_mut_ptr(f.last_frame).expect("failed to convert frame addr");
-        let stack_offset = stack_range.end().as_u64() - old_frame_addr.as_u64();
-        let new_frame_addr = new_stack.end() - stack_offset;
-        let new_frame = cake::stacktrace::StackFrame {
-            last_frame: if old_frame_addr.is_null() {
-                ptr::null_mut()
-            } else {
-                new_frame_addr.as_mut_ptr()
-            },
-            instruction_pointer: f.instruction_pointer,
-        };
-        trace_disabled!(
-            "kernel.mem.frameremap",
-            "Remapping frame pointer from {:#x} to {:#x}",
-            old_frame_addr.as_u64(),
-            new_frame.last_frame as u64
-        );
-        unsafe {
-            cake::stacktrace::write_frame(current_frame, new_frame);
-        }
-
-        current_frame = f.last_frame;
-        frame = unsafe { cake::stacktrace::read_frame(current_frame) };
-    }
 
     let new_as = builder
         .unmount()
@@ -153,27 +131,16 @@ fn map_kernel(recursive_idx: PageTableIndex) -> Result<(), MemError> {
     );
     unsafe {
         asm! {
-            "mov r10, rax",        // r10 = old_stack_top
-            "sub r10, rsp",       // r10 = old_stack_top - rsp (the offset of the current stack pointer from the top of the old stack)
-            "mov r9, rcx",        // r9 = new_stack_top
-            "sub r9, r10",        // r9 = new_stack_top - old_stack_offset (the new stack pointer position)
-
-            "mov r10, rax",       // r10 = old_stack_top
-            "sub r10, rbp",       // r10 = old_stack_top - rbp (the offset of the current frame pointer from the top of the old stack)
-            "mov r11, rcx",       // r11 = new_stack_top
-            "sub r11, r10",       // r11 = new_stack_top - old_stack_offset (the new frame pointer position)
-
             "mov cr3, r8",        // load cr3
-            "mov rsp, r9",        // update stack
-            "mov rbp, r11",       // update frame pointer
+            "mov rsp, rcx",        // update stack
+            "xor rbp, rbp",       // clear rbp to avoid issues with stack unwinding
+            "jmp {exitpoint}",    // jump to exitpoint
+            exitpoint = sym exitpoint,
             in("r8") l4_paddr.start_address().as_u64(), // cr3
             in("rcx") new_stack.end().as_u64(),         // new stack top
-            in("rax") stack_range.end().as_u64(),       // old stack top
+            options(noreturn)
         }
     }
-    info!("Address space switched successfully!");
-
-    Ok(())
 }
 
 unsafe fn init_tmm() -> Result<PageTableIndex, MemError> {

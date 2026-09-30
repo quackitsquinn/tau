@@ -83,6 +83,11 @@ pub(crate) unsafe fn init_kernel_services() {
         panic!("init_kernel_services called more than once");
     }
     INIT.blow();
+
+    init_stage0();
+}
+
+fn init_stage0() {
     serial::MODULE.init();
     output::MODULE.init();
     requests::MODULE.init();
@@ -91,18 +96,14 @@ pub(crate) unsafe fn init_kernel_services() {
     get_serial_client().enable_packet_support();
     cake::init_rng();
     unsafe { cake::init_core_id() };
+
     memory::MODULE.init();
+}
+
+extern "C" fn init_stage1() -> ! {
+    info!("Reached init_stage1, initializing kernel services...");
     gdt::MODULE.init();
     hardware::MODULE.init();
-    // {
-    //     let e = File::create_file("test.txt").unwrap();
-    //     e.write(b"Hello, world!").unwrap();
-    //     unsafe {
-    //         e.close();
-    //     }
-    // }
-
-    // test_two_way_serial();
     mp::PREINIT_MODULE.init();
     #[cfg(not(test))] // Tests don't have a display
     display::MODULE.init();
@@ -110,10 +111,8 @@ pub(crate) unsafe fn init_kernel_services() {
     pci::MODULE.init();
     //proc::MODULE.init();
     info!("Kernel services initialized");
-}
 
-fn init_cake() {
-    // cake::set_kernel_elf(requests::KERNEL_ELF.)
+    hlt_loop()
 }
 
 #[macro_export]
