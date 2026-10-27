@@ -20,8 +20,9 @@ use core::{
 
 extern crate alloc;
 
+use arrayvec::ArrayVec;
 use bitflags::bitflags;
-use cake::limine::memory_map;
+use cake::{limine::memory_map, stacktrace::StackTrace};
 
 #[doc(hidden)]
 pub use pastey as _pastey;
@@ -45,10 +46,12 @@ pub mod arch;
 pub mod bitmap;
 pub mod corelocal;
 pub mod entry_walker;
+pub mod err;
 mod init;
 pub mod kernel_map;
 pub mod paging;
 
+pub use err::{Error, MemError};
 /// The minimum size of the managed range required for the memory manager to function correctly.
 pub const MIN_MANAGED_RANGE_SIZE: u64 = arch::L3_PAGE_SIZE + arch::L2_PAGE_SIZE;
 
@@ -136,11 +139,51 @@ pub unsafe fn init(init_config: InitConfig) -> Result<(), MemError> {
 /// This enum defines the various ways in which physical memory can be allocated or copied when creating a new mapping in the virtual address space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
+#[non_exhaustive]
 pub enum MapSource {
-    /// Maps the given physical address directly to the virtual address.
-    Direct(PhysAddr),
     /// Allocate physical memory for the mapping.
     Anon,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryMapping {
+    /// The starting virtual address of the mapping.
+    pub mut(crate) virt_start: VirtAddr,
+    /// The starting physical address of the mapping.
+    pub mut(crate) phys_start: PhysAddr,
+    /// The size of the mapping in bytes.
+    pub mut(crate) size: u64,
+}
+
+impl MemoryMapping {
+    pub fn new(virt_start: VirtAddr, phys_start: PhysAddr, size: u64) -> Option<Self> {
+        if virt_start.checked_add(size).is_none() || phys_start.checked_add(size).is_none() {
+            return None;
+        }
+
+        Some(Self {
+            virt_start,
+            phys_start,
+            size,
+        })
+    }
+
+    pub fn virt_range(&self) -> MemoryRange<VirtAddr> {
+        MemoryRange::new(self.virt_start, self.virt_start + self.size)
+    }
+
+    pub fn phys_range(&self) -> MemoryRange<PhysAddr> {
+        MemoryRange::new(self.phys_start, self.phys_start + self.size)
+    }
+}
+
+pub fn map_direct(
+    mapping: MemoryMapping,
+    flags: MapFlags,
+    parent_table_flags: Option<MapFlags>,
+    op: &mut impl OperationAllSizes,
+) -> Result<ProvidedMemoryMapping, MemError> {
+    unsafe { paging::map_direct_unchecked(mapping, flags, parent_table_flags, op) }
 }
 
 /// Maps a virtual address range to a physical address range with the specified size
@@ -158,10 +201,6 @@ pub fn map(
     parent_table_flags: Option<MapFlags>,
     op: &mut impl OperationAllSizes,
 ) -> Result<(), MemError> {
-    if let MapSource::Direct(phys_base) = src {
-        check_range_phys(phys_base, dest.size() as usize)?;
-    }
-
     unsafe { paging::map_unchecked(dest, src, flags, parent_table_flags, op) }
 }
 
@@ -221,30 +260,46 @@ pub fn free_frame<S: FragmentSize>(frame: Frame<S>) {
 
 /// A structure representing a mapping between a virtual address range and a physical address range, along with the size of the mapping in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MemoryMapping {
-    /// The starting virtual address of the mapped range.
-    pub mut(crate) virt_range: VirtRange,
-    /// The range of physical memory that is mapped.
-    pub mut(crate) phys_range: PhysRange,
+pub struct ProvidedMemoryMapping {
+    mapping: MemoryMapping,
+    anon_virt_backed: bool,
 }
 
-impl MemoryMapping {
+impl ProvidedMemoryMapping {
     /// Creates a new `MemoryMapping` instance with the specified virtual base address, physical base address, and size in bytes.
-    pub fn new(virt_range: VirtRange, phys_range: MemoryRange<PhysAddr>) -> Self {
+    pub(crate) fn new(
+        virt_start: VirtAddr,
+        phys_start: PhysAddr,
+        size: u64,
+        anon_virt_backed: bool,
+    ) -> Option<Self> {
+        MemoryMapping::new(virt_start, phys_start, size).map(|mapping| Self {
+            mapping,
+            anon_virt_backed,
+        })
+    }
+
+    /// Creates a new `ProvidedMemoryMapping` instance from an existing `MemoryMapping` and a flag indicating whether the mapping is backed by anonymous virtual memory.
+    pub(crate) fn from_mapping(mapping: MemoryMapping, anon_virt_backed: bool) -> Self {
         Self {
-            virt_range,
-            phys_range,
+            mapping,
+            anon_virt_backed,
         }
+    }
+
+    pub(crate) fn deallocate_virtual(mut self, should_deallocate_vm: bool) -> Self {
+        self.anon_virt_backed = should_deallocate_vm;
+        self
     }
 
     /// Returns an immutable pointer to the start of the mapped virtual address range, allowing for direct access to the mapped memory.
     pub fn as_ptr<T>(&self) -> *const T {
-        self.virt_range.start().as_ptr()
+        self.mapping.virt_range().start().as_ptr()
     }
 
     /// Returns a mutable pointer to the start of the mapped virtual address range, allowing for direct access to the mapped memory.
     pub fn as_mut_ptr<T>(&self) -> *mut T {
-        self.virt_range.start().as_mut_ptr()
+        self.mapping.virt_range().start().as_mut_ptr()
     }
 }
 
@@ -260,197 +315,28 @@ fn make_layout_for_mapping(phys_range: MemoryRange<PhysAddr>) -> Layout {
 pub fn create_phys_mapping(
     phys_range: MemoryRange<PhysAddr>,
     flags: MapFlags,
-) -> Result<MemoryMapping, MemError> {
+) -> Result<ProvidedMemoryMapping, MemError> {
     let virt_range = reserve_virtual(make_layout_for_mapping(phys_range))?;
-    unsafe {
-        paging::map_unchecked(
-            virt_range,
-            MapSource::Direct(phys_range.start()),
-            flags,
-            None,
-            &mut (),
-        )
-    }?;
-    Ok(MemoryMapping::new(virt_range, phys_range))
+    map_direct(
+        MemoryMapping::new(virt_range.start(), phys_range.start(), phys_range.size()).unwrap(),
+        flags,
+        None,
+        &mut (),
+    )
+    .map(|m| m.deallocate_virtual(true))
 }
 
 /// Frees a physical memory mapping that was previously created with `create_phys_mapping`, unmapping the virtual address range and freeing the allocated virtual address space.
-pub unsafe fn free_phys_mapping(mapping: MemoryMapping) -> Result<(), MemError> {
+pub unsafe fn free_phys_mapping(mapping: ProvidedMemoryMapping) -> Result<(), MemError> {
     unsafe {
-        unmap(mapping.virt_range)?;
-        free_virtual(
-            mapping.virt_range,
-            make_layout_for_mapping(mapping.phys_range),
-        )
-    }
-}
-
-/// The reason why a virtual address range was rejected as invalid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum InvalidRangeReason {
-    /// The address range would overflow when calculating the end address (i.e., `virt_base + byte_size` would overflow).
-    Overflow,
-    /// The address range is not canonical for the architecture (e.g., on x86_64, the upper bits beyond the architecture's address width are not all 0s or all 1s).
-    NonCanonical,
-    /// The address range is not aligned to the required page size (i.e., `virt_base` is not a multiple of the page size, or `byte_size` is not a multiple of the page size).
-    Unaligned,
-}
-
-/// An error that can occur during memory mapping operations, such as invalid addresses, insufficient resources, or permission issues. The specific variants of this error type can be defined based on the needs of the memory manager implementation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum MemError {
-    /// The mapping operation failed because the provided range was already mapped to a different physical address. The provided physical address is included for reference.
-    #[error(
-        "The provided virtual address range is already mapped to a different physical address: {0:?}"
-    )]
-    AlreadyMapped(PhysAddr),
-    /// The mapping operation failed because the system ran out of memory to complete the mapping.
-    /// This could occur if there are no free physical pages available to back the mapping, or if the memory manager's internal data structures are exhausted.
-    #[error("The mapping operation failed due to insufficient memory resources.")]
-    OutOfMemory,
-    /// The provided virtual address range is invalid, such as being out of bounds for the architecture or overflowing when calculating the end address.
-    #[error("The provided virtual address range is invalid: {begin:?} with size {size} bytes")]
-    InvalidVirtRange {
-        /// The specific reason why the virtual address range is considered invalid (e.g., overflow, unaligned, etc.).
-        reason: InvalidRangeReason,
-        /// The starting virtual address of the invalid range.
-        begin: VirtAddr,
-        /// The size of the invalid range in bytes.
-        size: u64,
-    },
-    /// The provided physical address range is invalid, such as being out of bounds for the architecture or overflowing when calculating the end address.
-    #[error("The provided physical address range is invalid: {begin:?} with size {size} bytes")]
-    InvalidPhysRange {
-        /// The specific reason why the physical address range is considered invalid (e.g., overflow, unaligned, etc.).
-        reason: InvalidRangeReason,
-        /// The starting physical address of the invalid range.
-        begin: PhysAddr,
-        /// The size of the invalid range in bytes.
-        size: u64,
-    },
-    /// The provided scratch space for initialization is too small to be used for the necessary virtual memory operations during initialization and `alloc_paged`.
-    #[error(
-        "The provided scratch space is too small: provided {provided} bytes, but at least {required} bytes are required."
-    )]
-    ScratchSpaceTooSmall {
-        /// The size of the provided scratch space in bytes.
-        provided: u64,
-        /// The minimum required size of the scratch space in bytes.
-        required: u64,
-    },
-    /// The required resources to complete the requested operation have not been initialized yet.
-    #[error(
-        "The required resources to complete the requested operation have not been initialized yet: {0}"
-    )]
-    Uninit(&'static str),
-    /// The requested operation failed because the specified virtual address range is not currently mapped to any physical memory, and therefore cannot be unmapped or accessed.
-    /// The provided virtual address is included for reference.
-    #[error("The specified virtual address range is not currently mapped to any physical memory")]
-    NotMapped(AnyFragment<PageClass>),
-    /// The requested operation failed because a needed entry in the page table points to an invalid frame address.
-    #[error("The page table entry points to an invalid frame address: {0:?}")]
-    InvalidFrameAddress(PhysAddr),
-    /// The provided alignment value is invalid (e.g., not a power of two).
-    #[error("The provided alignment is invalid: {0} is not a power of two.")]
-    InvalidAlignment(usize),
-    /// The requested operation failed due to the provided virtual address not being managed by whatever resource is being accessed.
-    #[error("The provided virtual address is not managed by the memory manager: {0:?}")]
-    UnmanagedVirtual(
-        /// The virtual address that is not managed by the memory manager.
-        VirtAddr,
-    ),
-    /// The requested operation failed due to the provided physical address not being managed by whatever resource is being accessed.
-    #[error("The provided physical address is not managed by the memory manager: {0:?}")]
-    UnmanagedPhysical(
-        /// The physical address that is not managed by the memory manager.
-        PhysAddr,
-    ),
-    /// The requested operation failed because the provided virtual address is mapped to a higher-level page table entry,
-    /// preventing the requested operation from completing.
-    #[error(
-        "The provided virtual address is mapped to a higher-level page table entry, preventing the requested operation from completing: {0:?}"
-    )]
-    MappedToHigherLevel(
-        /// The virtual address that is mapped to a higher-level page table entry, preventing the requested operation from completing.
-        VirtAddr,
-    ),
-    /// The requested operation failed because the provided virtual address is mapped to a lower-level page table entry,
-    /// preventing the requested operation from completing.
-    #[error(
-        "The provided virtual address is mapped to a lower-level page table entry, preventing the requested operation from completing: {0:?}"
-    )]
-    MappedToLowerLevel(
-        /// The virtual address that is mapped to a lower-level page table entry, preventing the requested operation from completing.
-        VirtAddr,
-    ),
-    /// The requested operation failed because the required resources are unavailable, such as a missing page table or a second address space builder on the same address space.
-    #[error("The requested operation failed because the required resources are unavailable: {0}")]
-    ResourceUnavailable(&'static str),
-    /// The requested operation failed because the required page table is not present in memory.
-    #[error(
-        "The requested operation failed because the required page table is not present in memory."
-    )]
-    PagetableNotPresent,
-    /// The requested operation failed because a global page was encountered, which is not supported or disabled.
-    #[error(
-        "The requested operation failed because a global page was encountered, which is not supported or disabled."
-    )]
-    GlobalPageEncountered,
-    /// An error that originated from architecture-specific operations in the memory manager.
-    #[error("An architecture-specific error occurred during memory management operations: {0}")]
-    ArchError(#[from] arch::ArchError),
-    /// The requested operation is invalid in the current context, such as attempting to perform an operation that is not allowed or supported.
-    #[error("The requested operation is invalid in the current context.")]
-    InvalidOperation,
-    /// The requested operation failed due to an error in the copy mappings operation, such as a failure to copy mappings between page tables or address spaces.
-    #[error("The requested operation failed due to an error in the copy mappings operation: {0:?}")]
-    CopyMappingError(#[from] CopyMappingError),
-    /// An error that originated from the underlying memory mapping implementation, such as page table manipulation or low-level memory operations.
-    #[error("An error occurred during memory management operations: {0}")]
-    Other(&'static str),
-}
-
-impl MemError {
-    pub(crate) fn scratch_space_too_small(provided: u64) -> Self {
-        Self::ScratchSpaceTooSmall {
-            provided,
-            required: MIN_MANAGED_RANGE_SIZE,
+        unmap(mapping.mapping.virt_range())?;
+        if mapping.anon_virt_backed {
+            free_virtual(
+                mapping.mapping.virt_range(),
+                make_layout_for_mapping(mapping.mapping.phys_range()),
+            )?;
         }
     }
-}
-
-const fn check_range_virt(virt_base: VirtAddr, byte_size: usize) -> Result<(), MemError> {
-    // Check for overflow in the address range
-    let val = virt_base.checked_add(byte_size as u64);
-    match val {
-        Some(_) => (),
-        None => {
-            return Err(MemError::InvalidVirtRange {
-                reason: InvalidRangeReason::Overflow,
-                begin: virt_base,
-                size: byte_size as u64,
-            });
-        }
-    };
-
-    Ok(())
-}
-
-fn check_range_phys(phys_base: PhysAddr, byte_size: usize) -> Result<(), MemError> {
-    // Check for overflow in the address range
-    let val = phys_base.checked_add(byte_size as u64);
-    match val {
-        Some(_) => (),
-        None => {
-            return Err(MemError::InvalidPhysRange {
-                reason: InvalidRangeReason::Overflow,
-                begin: phys_base,
-                size: byte_size as u64,
-            });
-        }
-    };
 
     Ok(())
 }
@@ -556,3 +442,45 @@ cake::encapsulate_macro!(
         };
     }
 );
+
+///
+/// Recursively matches against a `MemError` and its variants, allowing for pattern matching on nested error types (without specifying it twice)
+///
+/// # Example
+///
+/// ```
+/// let err = mem_err!(MalformedPageStructure::PagetableNotPresent);
+/// match err {
+///     mem_err!(MalformedPageStructure::PagetableNotPresent) => {
+///         println!("It works!");
+///     }
+/// }
+/// ```
+///
+#[macro_export]
+macro_rules! mem_err {
+    ($variant:ident :: $($rest:tt)+) => {
+        $crate::MemError::$variant($crate::mem_err!(@inner $variant :: $($rest)+))
+    };
+
+    ($variant:ident $(($($pattern:tt)*))?) => {
+        $crate::MemError::$variant$(($($pattern)*))?
+    };
+
+    (@inner $variant:ident :: $sub_variant:ident ($($pattern:tt)*)) => {
+        $crate::err::$variant::$sub_variant($($pattern)*)
+    };
+
+    (@inner $variant:ident :: $sub_variant:ident ) => {
+        $crate::err::$variant::$sub_variant
+    };
+
+    (Err $variant:ident $(($($pattern:tt)*))?) => {
+        Err($crate::MemError::$variant$($($pattern)*)?)
+    };
+
+    (Err $variant:ident :: $($rest:tt)+) => {
+        Err($crate::MemError::$variant($crate::mem_err!(@inner $variant :: $($rest)+)))
+    };
+
+}

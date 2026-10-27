@@ -5,6 +5,8 @@ use cake::log::error;
 
 use crate::{
     MapFlags, MemError,
+    err::MalformedPageStructure,
+    mem_err,
     paging::{
         Address, FragmentManager, FragmentSize, Frame, Large, Medium, MemoryFragment, MemoryRange,
         Page, PageTable, PageTableEntry, PageTableIndex, Small, VirtAddr,
@@ -179,9 +181,9 @@ impl SizedMemoryMapper<Large> for RecursivePageTable<'_> {
         let table = self.l3_table_mut(l4)?;
         let entry = table.read_entry(l3);
         if !entry.is_present() {
-            return Err(MemError::NotMapped(AnyPage::Large(page)));
+            return mem_err!(Err MalformedPageStructure::NotMapped(AnyPage::Large(page)));
         } else if !entry.is_huge() {
-            return Err(MemError::MappedToLowerLevel(page.start_address()));
+            return mem_err!(Err MalformedPageStructure::MappedToLowerLevel(page.start_address()));
         }
         unsafe {
             table.set_entry(l3, PageTableEntry::empty());
@@ -226,9 +228,9 @@ impl SizedMemoryMapper<Medium> for RecursivePageTable<'_> {
         let table = self.l2_table_mut(l4, l3)?;
         let entry = table.read_entry(l2);
         if !entry.is_present() {
-            return Err(MemError::NotMapped(AnyPage::Medium(page)));
+            return mem_err!(Err MalformedPageStructure::NotMapped(AnyPage::Medium(page)));
         } else if !entry.is_huge() {
-            return Err(MemError::MappedToLowerLevel(page.start_address()));
+            return mem_err!(Err MalformedPageStructure::MappedToLowerLevel(page.start_address()));
         }
         unsafe {
             table.set_entry(l2, PageTableEntry::empty());
@@ -273,7 +275,7 @@ impl SizedMemoryMapper<Small> for RecursivePageTable<'_> {
         let table = self.l1_table_mut(l4, l3, l2)?;
         let entry = table.read_entry(l1);
         if !entry.is_present() {
-            return Err(MemError::NotMapped(AnyPage::Small(page)));
+            return mem_err!(Err MalformedPageStructure::NotMapped(AnyPage::Small(page)));
         }
 
         unsafe {
@@ -303,7 +305,7 @@ impl PagetableAccessor for RecursivePageTable<'_> {
         );
 
         if !self.p4().read_entry(l4_index).is_present() {
-            return Err(MemError::PagetableNotPresent);
+            return mem_err!(Err MalformedPageStructure::PagetableNotPresent);
         }
 
         Ok(VirtAddr::new_truncate(addr_raw))
@@ -324,18 +326,18 @@ impl PagetableAccessor for RecursivePageTable<'_> {
         let entry = self.l3_table(l4_index)?.read_entry(l3_index);
 
         if !entry.is_present() {
-            return Err(MemError::PagetableNotPresent);
+            return mem_err!(Err MalformedPageStructure::PagetableNotPresent);
         }
 
         if entry.is_huge() {
-            return Err(MemError::MappedToHigherLevel(VirtAddr::new_truncate(
-                accessor::build_address(
+            return mem_err!(Err MalformedPageStructure::MappedToHigherLevel(
+                VirtAddr::new_truncate(accessor::build_address(
                     l4_index,
                     l3_index,
                     PageTableIndex::new(0),
                     PageTableIndex::new(0),
-                ),
-            )));
+                )),
+            ));
         }
 
         Ok(VirtAddr::new_truncate(addr_raw))
@@ -351,13 +353,18 @@ impl PagetableAccessor for RecursivePageTable<'_> {
 
         let entry = self.l2_table(l4_index, l3_index)?.read_entry(l2_index);
         if !entry.is_present() {
-            return Err(MemError::PagetableNotPresent);
+            return mem_err!(Err MalformedPageStructure::PagetableNotPresent);
         }
 
         if entry.is_huge() {
-            return Err(MemError::MappedToHigherLevel(VirtAddr::new_truncate(
-                accessor::build_address(l4_index, l3_index, l2_index, PageTableIndex::new(0)),
-            )));
+            return mem_err!(Err MalformedPageStructure::MappedToHigherLevel(
+                VirtAddr::new_truncate(accessor::build_address(
+                    l4_index,
+                    l3_index,
+                    l2_index,
+                    PageTableIndex::new(0)
+                ),)
+            ));
         }
 
         Ok(VirtAddr::new_truncate(addr_raw))

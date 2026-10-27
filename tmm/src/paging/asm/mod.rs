@@ -15,6 +15,7 @@ use crate::{
     arch::{self},
     bitmap::{PhysicalMemoryManager, VirtualMemoryManager},
     corelocal::{CoreLocal, NoDefaultInit},
+    mem_err,
     paging::{
         Address, AddressExt, FragmentSize, Frame, Large, MemoryFragment, Page, PageTable,
         PageTableEntry, PageTableIndex, RecursiveEntryManager, Small,
@@ -289,7 +290,7 @@ pub(crate) unsafe fn init_recursive_mapping(
         let p4 = mapper.p4_mut();
         let entry = p4.read_entry(recursive_idx);
         if entry.is_present() {
-            return Err(MemError::AlreadyMapped(entry.addr()));
+            return mem_err!(Err MalformedPageStructure::AlreadyMapped(entry.addr()));
         }
 
         p4.set_entry(

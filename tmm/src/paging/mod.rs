@@ -21,7 +21,7 @@ use cake::log::trace;
 pub use index::PageTableIndex;
 
 use crate::{
-    MapFlags, MapSource, MemError,
+    MapFlags, MapSource, MemError, MemoryMapping, ProvidedMemoryMapping,
     arch::{Mapper, PageEntryType},
     paging::{
         fragment::GreedyFragmentMapper,
@@ -31,6 +31,7 @@ use crate::{
         },
         operation::OperationAllSizes,
         primitives::{AnyFragment, PageClass, PrimitiveClass, VirtRange},
+        recursive::RecursivePageTable,
     },
 };
 
@@ -110,7 +111,7 @@ where
 pub unsafe fn unmap_primitive<S>(dst: Page<S>) -> Result<Unmapped<S>, MemError>
 where
     S: FragmentSize,
-    Mapper: SizedMemoryMapper<S>,
+    RecursivePageTable<'static>: SizedMemoryMapper<S>,
 {
     trace!("Unmapping page {:?}", dst);
 
@@ -143,6 +144,35 @@ where
     unsafe { mapper.map_from(range, flags, parent_table_flags, provider, operation) }
 }
 
+pub(crate) unsafe fn map_direct_unchecked(
+    mapping: MemoryMapping,
+    flags: MapFlags,
+    parent_table_flags: Option<MapFlags>,
+    op: &mut impl OperationAllSizes,
+) -> Result<ProvidedMemoryMapping, MemError> {
+    let range = mapping.virt_range();
+    let phys_start = mapping.phys_range().start();
+
+    trace!(
+        "Mapping physical memory at address {:#x} to virtual address {:?} and flags {:?}",
+        phys_start.as_u64(),
+        range,
+        flags
+    );
+
+    unsafe {
+        map_from(
+            range,
+            flags,
+            parent_table_flags,
+            &mut PhysLinear(phys_start, &mut GlobalMemoryProvider),
+            op,
+        )?;
+    }
+
+    Ok(ProvidedMemoryMapping::from_mapping(mapping, false))
+}
+
 pub(crate) unsafe fn map_unchecked(
     dest: MemoryRange<VirtAddr>,
     src: MapSource,
@@ -151,23 +181,6 @@ pub(crate) unsafe fn map_unchecked(
     op: &mut impl OperationAllSizes,
 ) -> Result<(), MemError> {
     match src {
-        MapSource::Direct(phys_base) => {
-            trace!(
-                "Mapping physical memory at address {:#x} to virtual address {:?} and flags {:?}",
-                phys_base.as_u64(),
-                dest,
-                flags
-            );
-            unsafe {
-                map_from(
-                    dest,
-                    flags,
-                    parent_table_flags,
-                    &mut PhysLinear(phys_base, &mut GlobalMemoryProvider),
-                    op,
-                )?
-            };
-        }
         MapSource::Anon => unsafe {
             trace!(
                 "Allocating to virtual address {:?} and flags {:?}",

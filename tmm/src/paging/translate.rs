@@ -4,6 +4,7 @@ use cake::log::error;
 
 use crate::{
     MapFlags, MemError,
+    err::MalformedPageStructure,
     paging::{
         FragmentSize, Frame, MemoryFragment, MemoryRange, Page, PageTableIndex, Small, VirtAddr,
         accessor::{self, PagetableAccessor},
@@ -48,7 +49,9 @@ where
         let (l4, l3, l2, l1) = accessor::dissolve_address(addr);
         let l3_table = match self.l3_table(l4) {
             Ok(table) => table,
-            Err(MemError::NotMapped(_)) => return TranslateResult::NotMapped(4),
+            Err(MemError::MalformedPageStructure(MalformedPageStructure::NotMapped(_))) => {
+                return TranslateResult::NotMapped(4);
+            }
             Err(e) => return TranslateResult::Error(e),
         };
 

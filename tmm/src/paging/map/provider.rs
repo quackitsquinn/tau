@@ -1,9 +1,10 @@
 use crate::{
     MemError,
     arch::Mapper,
+    mem_err,
     paging::{
         FragmentManager, FragmentSize, Frame, FullManager, Large, Medium, MemoryFragment, PhysAddr,
-        Small, asm, map::SizedMemoryMapper, primitives::FrameClass,
+        Small, asm, map::SizedMemoryMapper, primitives::FrameClass, recursive::RecursivePageTable,
     },
 };
 
@@ -12,7 +13,7 @@ pub trait MemoryProvider<S: FragmentSize> {
     /// Allocates a frame of the specified size for use as data in a mapping operation.
     fn allocate_data(&mut self) -> Result<Frame<S>, MemError>
     where
-        Mapper: SizedMemoryMapper<S>;
+        RecursivePageTable<'static>: SizedMemoryMapper<S>;
     /// Allocates a frame of the specified size for use as a page table in a mapping operation.
     fn allocate_table(&mut self) -> Result<Frame<Small>, MemError>;
 }
@@ -32,8 +33,9 @@ impl<'a, Ta: FragmentManager<Frame<Small>, Small>, S: FragmentSize> MemoryProvid
     for PhysLinear<'a, Ta>
 {
     fn allocate_data(&mut self) -> Result<Frame<S>, MemError> {
-        let frame =
-            Frame::from_start_address(self.0).ok_or(MemError::InvalidFrameAddress(self.0))?;
+        let frame = Frame::from_start_address(self.0).ok_or(mem_err!(
+            MalformedPageStructure::InvalidFrameAddress(self.0)
+        ))?;
         self.0 += S::SIZE;
         Ok(frame)
     }
@@ -105,7 +107,7 @@ where
 {
     fn allocate_data(&mut self) -> Result<Frame<S>, MemError>
     where
-        Mapper: SizedMemoryMapper<S>,
+        RecursivePageTable<'static>: SizedMemoryMapper<S>,
     {
         self.0.allocate_fragment()
     }
@@ -124,7 +126,7 @@ pub struct GlobalMemoryProvider;
 impl<S: FragmentSize> MemoryProvider<S> for GlobalMemoryProvider {
     fn allocate_data(&mut self) -> Result<Frame<S>, MemError>
     where
-        Mapper: SizedMemoryMapper<S>,
+        RecursivePageTable<'static>: SizedMemoryMapper<S>,
     {
         asm::pmm().allocate_fragment()
     }

@@ -6,7 +6,7 @@ use cake::trace_disabled;
 use crate::{
     MapFlags,
     MemError::{self},
-    align, arch,
+    align, arch, mem_err,
     paging::{
         Address, AddressExt, FragmentManager, FragmentSize, Frame, FullManager, Large, Medium,
         MemoryFragment, MemoryRange, Page, PageTable, PageTableEntry, PageTableIndex, PhysAddr,
@@ -318,7 +318,7 @@ pub unsafe fn cleanup_l4_range(
 
         match unsafe { cleanup_l3(p4_idx, accessor, dealloc, should_traverse_globals) } {
             Ok(()) => {}
-            Err(MemError::GlobalPageEncountered) => {
+            mem_err!(Err MalformedPageStructure::GlobalPageEncountered) => {
                 if !should_traverse_globals {
                     continue;
                 }
@@ -457,14 +457,14 @@ fn access_and_clear_table<C>(
         }
 
         if entry.flags().contains(MapFlags::GLOBAL) && !should_traverse_globals {
-            err = Err(MemError::GlobalPageEncountered);
+            err = mem_err!(Err MalformedPageStructure::GlobalPageEncountered);
             continue;
         }
 
         match traverse(&mut ctx, idx) {
             Ok(_) => {}
-            Err(MemError::GlobalPageEncountered) => {
-                err = Err(MemError::GlobalPageEncountered);
+            mem_err!(Err MalformedPageStructure::GlobalPageEncountered) => {
+                err = mem_err!(Err MalformedPageStructure::GlobalPageEncountered);
             }
             Err(e) => {
                 return Err(e);
