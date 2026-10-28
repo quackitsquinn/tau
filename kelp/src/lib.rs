@@ -4,6 +4,7 @@
 //! symbols, strings, and segments from an ELF file.
 
 #![no_std]
+#![feature(mut_restriction)]
 
 use core::fmt::Debug;
 
@@ -29,7 +30,7 @@ mod strings;
 /// An ELF executable
 pub struct Elf<'a> {
     /// The raw ELF data
-    pub data: &'a [u8],
+    pub mut(crate) data: &'a [u8],
     header: &'a header::Header,
 }
 /// An error that can occur while parsing an ELF file.

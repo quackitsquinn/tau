@@ -8,6 +8,7 @@
 #![feature(allocator_api)]
 #![feature(const_trait_impl)]
 #![feature(ptr_alignment_type)]
+#![feature(mut_restriction)]
 /* TEST RUNNER */
 #![test_runner(crate::testing::test_runner)]
 #![reexport_test_harness_main = "test_main"]

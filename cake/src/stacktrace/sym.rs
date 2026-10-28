@@ -4,7 +4,7 @@ use crate::KERNEL_ELF;
 
 /// Resolves a symbol name for the given address.
 pub fn resolve_sym(addr: *const ()) -> Option<&'static str> {
-    let elf = KERNEL_ELF.get()?;
+    let elf = crate::kernel_elf()?;
 
     let sym = elf.symbols()?.iter().find(|s| {
         let sym_addr = s.st_value as usize;

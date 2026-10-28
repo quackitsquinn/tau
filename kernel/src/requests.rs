@@ -92,7 +92,6 @@ fn init() -> Result<(), Infallible> {
     cake::set_kernel_elf(unsafe {
         core::slice::from_raw_parts(file.addr() as *const u8, file.size() as usize)
     })
-    .unwrap()
     .unwrap();
 
     BOOT_TIMESTAMP.call_once(|| DATE_AT_BOOT.get_response().unwrap().timestamp().as_secs());

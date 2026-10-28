@@ -10,7 +10,7 @@ use crate::{
     STACK_SIZE, declare_module,
     requests::{MEMORY_MAP, PHYSICAL_MEMORY_OFFSET},
 };
-use alloc::vec::Vec;
+use alloc::{alloc::Allocator, vec::Vec};
 use cake::{
     log::{info, trace},
     trace_disabled,
@@ -61,7 +61,13 @@ const HEAP_CONFIG: HeapConfig = HeapConfig {
 static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator::new(HEAP_CONFIG);
 
 fn init() -> Result<(), Infallible> {
-    let recursive_idx = unsafe { init_tmm().unwrap() };
+    let recursive_idx = match unsafe { init_tmm() } {
+        Ok(idx) => idx,
+        Err(e) => {
+            panic!("Failed to initialize tmm: {}", e);
+        }
+    };
+
     match map_kernel(recursive_idx) {
         Err(e) => {
             panic!("Failed to map kernel: {:?}", e);
@@ -72,7 +78,11 @@ fn init() -> Result<(), Infallible> {
 extern "C" fn exitpoint() -> ! {
     info!("Kernel memory mapped successfully");
     info!("Initializing kernel heap allocator...");
-    assert!(GLOBAL_ALLOCATOR.init().unwrap());
+
+    match GLOBAL_ALLOCATOR.init() {
+        Ok(_) => info!("Kernel heap allocator initialized successfully"),
+        Err(e) => panic!("Failed to initialize kernel heap allocator: {:?}", e),
+    }
     info!(
         "Kernel heap initialized with initial size: {} bytes",
         HEAP_CONFIG.initial_heap_size
@@ -156,6 +166,26 @@ unsafe fn init_tmm() -> Result<PageTableIndex, ContextualizedError> {
     info!("Initializing tmm {:?}", init);
     unsafe { tmm::init(init) }?;
     info!("Memory manager initialized");
+
+    // Copy the kernel mappings into the managed range so it isn't lost when the kernel is remapped.
+    let alloc = HeaplessAllocator::new(MapFlags::WRITABLE);
+    let kernel_elf = cake::kernel_elf().ok_or(MemError::Uninit("kernel elf"))?;
+    let alloc = match alloc.allocate(Layout::array::<u8>(kernel_elf.data.len()).unwrap()) {
+        Ok(ptr) => ptr,
+        Err(_) => return Err(MemError::OutOfMemory.into()),
+    };
+    unsafe {
+        ptr::copy_nonoverlapping(
+            kernel_elf.data.as_ptr(),
+            alloc.as_ptr().cast::<u8>(),
+            kernel_elf.data.len(),
+        );
+    }
+    let slice =
+        unsafe { core::slice::from_raw_parts(alloc.as_ptr().cast::<u8>(), kernel_elf.data.len()) };
+    drop(kernel_elf);
+    cake::set_kernel_elf(slice).unwrap();
+
     Ok(recursive_idx)
 }
 

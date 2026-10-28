@@ -1,3 +1,5 @@
+use core::fmt;
+
 use cake::stacktrace::{self, StackTrace};
 
 use crate::{
@@ -167,5 +169,13 @@ impl ContextualizedError {
 impl From<MemError> for ContextualizedError {
     fn from(err: MemError) -> Self {
         ContextualizedError::from_raw_parts(err, stacktrace::collect_stacktrace())
+    }
+}
+
+impl fmt::Display for ContextualizedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Error: {}", self.cause)?;
+        writeln!(f, "Stack trace:")?;
+        self.trace.print(0, f)
     }
 }

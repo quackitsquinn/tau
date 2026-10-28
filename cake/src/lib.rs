@@ -13,7 +13,10 @@ mod owned;
 mod resource;
 pub mod securand;
 pub mod stacktrace;
+use core::mem;
+
 pub use id::{core_count, core_id, init_core_id, set_core_count};
+use lock_api::MappedRwLockReadGuard;
 
 /* Crate Exports */
 pub use self::limine_request::{
@@ -43,21 +46,29 @@ pub type RawMutex = spin::Mutex<()>;
 /// Type alias for a raw read-write lock.
 pub type RawRwLock = spin::RwLock<()>;
 
-static CALLER_INSTRUCTION_POINTER_FN: Once<fn() -> usize> = Once::new();
-static CALLER_INSTRUCTION_POINTER_NAME_RESOLVER: Once<fn(usize) -> Option<&'static str>> =
-    Once::new();
 static MULTITHREADED: Once<bool> = Once::new();
 
-pub(crate) static KERNEL_ELF: Once<Elf<'static>> = Once::new();
+pub(crate) static KERNEL_ELF: RwLock<Option<Elf<'static>>> = RwLock::new(None);
 
-pub fn set_kernel_elf(kernel_elf: &'static [u8]) -> Result<Option<()>, kelp::ElfError> {
+pub fn set_kernel_elf(kernel_elf: &'static [u8]) -> Result<Option<Elf<'static>>, kelp::ElfError> {
     let elf = Elf::new(kernel_elf)?;
-    let mut set = false;
-    KERNEL_ELF.call_once(|| {
-        set = true;
-        elf
-    });
-    if set { Ok(Some(())) } else { Ok(None) }
+    let mut old = Some(elf);
+    let mut lock = KERNEL_ELF.write();
+    mem::swap(&mut *lock, &mut old);
+
+    Ok(old)
+}
+
+pub type KernelElfLock<'a> = MappedRwLockReadGuard<'a, RawRwLock, Elf<'static>>;
+
+/// Returns a read lock to the kernel ELF, if it has been set.
+pub fn kernel_elf() -> Option<KernelElfLock<'static>> {
+    let lock = KERNEL_ELF.read();
+    if lock.is_none() {
+        return None;
+    }
+
+    Some(RwLockReadGuard::map(lock, |opt| opt.as_ref().unwrap()))
 }
 
 /// Returns true if the kernel is running in a multithreaded environment (i.e., with multiple cores).
