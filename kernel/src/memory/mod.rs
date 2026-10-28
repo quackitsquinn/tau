@@ -17,7 +17,7 @@ use cake::{
 };
 use kalloc::{GlobalAllocator, HeapConfig};
 use tmm::{
-    InitConfig, MapFlags, MapSource, MemError,
+    ContextualizedError, InitConfig, MapFlags, MapSource, MemError,
     paging::{
         Address, AddressExt, MemoryFragment, MemoryRange, PageTable, PageTableEntry,
         PageTableIndex, VirtAddr, asm::InactiveAddressSpace, heapless::HeaplessAllocator,
@@ -63,7 +63,6 @@ static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator::new(HEAP_CONFIG);
 fn init() -> Result<(), Infallible> {
     let recursive_idx = unsafe { init_tmm().unwrap() };
     match map_kernel(recursive_idx) {
-        Ok(_) => Ok(()),
         Err(e) => {
             panic!("Failed to map kernel: {:?}", e);
         }
@@ -131,10 +130,11 @@ fn map_kernel(recursive_idx: PageTableIndex) -> Result<!, MemError> {
     );
     unsafe {
         asm! {
-            "mov cr3, r8",        // load cr3
-            "mov rsp, rcx",        // update stack
-            "xor rbp, rbp",       // clear rbp to avoid issues with stack unwinding
-            "jmp {exitpoint}",    // jump to exitpoint
+            "mov cr3, r8",          // load cr3
+            "mov rsp, rcx",         // update stack
+            "xor rbp, rbp",         // clear rbp to avoid issues with stack unwinding
+            "push 0",               // push a dummy return address to align the stack
+            "jmp {exitpoint}",      // jump to exitpoint
             exitpoint = sym exitpoint,
             in("r8") l4_paddr.start_address().as_u64(), // cr3
             in("rcx") new_stack.end().as_u64(),         // new stack top
@@ -143,7 +143,7 @@ fn map_kernel(recursive_idx: PageTableIndex) -> Result<!, MemError> {
     }
 }
 
-unsafe fn init_tmm() -> Result<PageTableIndex, MemError> {
+unsafe fn init_tmm() -> Result<PageTableIndex, ContextualizedError> {
     let memory_map = MEMORY_MAP.lock_limine();
     let memory_map = memory_map.entries();
     let recursive_idx = unsafe { find_set_recursive_entry().unwrap() };

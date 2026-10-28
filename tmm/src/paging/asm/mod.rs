@@ -177,7 +177,7 @@ pub unsafe fn prepare_inactive_space(
     let new_space = AddressSpace::new(mapper, space.l4_table_frame, space.scratch_page);
     let l4_frame = new_space.l4_table_frame;
 
-    unsafe { set_active(new_space) };
+    unsafe { set_active(new_space)? };
     if space.is_bootstrap {
         return Ok(l4_frame);
     }
@@ -185,12 +185,6 @@ pub unsafe fn prepare_inactive_space(
     mem::forget(space);
 
     Ok(l4_frame)
-}
-/// A trait for types that can own a mapping of memory into an address space.
-///
-/// This trait is used to allow types to map their internal state into an address space, such as the memory manager's internal data structures.
-pub trait MappingOwner {
-    fn map_into(&mut self, mapper: &mut MountedAddressSpace) -> Result<(), MemError>;
 }
 
 /// Zeros out the given frame by mapping it to a known V.A. and writing zeros to it.

@@ -1,19 +1,20 @@
 use core::{
     arch::asm,
-    fmt::{Debug, Write},
+    fmt::{self, Debug, Display, Write},
 };
 
 use arrayvec::ArrayVec;
 
 pub mod sym;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StackFrame {
     pub instruction_pointer: *const (),
     pub last_frame: *mut (),
 }
 
 /// A stack trace, consisting of a fixed-size array of stack frames.
+#[derive(Clone, PartialEq, Eq)]
 pub struct StackTrace<const LIMIT: usize> {
     frames: ArrayVec<StackFrame, LIMIT>,
 }
@@ -24,9 +25,15 @@ impl<const LIMIT: usize> Debug for StackTrace<LIMIT> {
     }
 }
 
+impl<const LIMIT: usize> Display for StackTrace<LIMIT> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.print(0, f)
+    }
+}
+
 impl<const LIMIT: usize> StackTrace<LIMIT> {
     /// Prints the stack trace to the given writer, skipping the first `skip_levels` frames.
-    pub fn print(&self, skip_levels: usize, writer: impl Write) {
+    pub fn print(&self, skip_levels: usize, writer: impl Write) -> fmt::Result {
         let mut writer = writer;
 
         for (i, frame) in self.frames.iter().enumerate() {
@@ -39,13 +46,15 @@ impl<const LIMIT: usize> StackTrace<LIMIT> {
 
             match symbol {
                 Some(sym) => {
-                    writeln!(writer, "{} {:p}: {:#}", i - skip_levels, addr, sym).unwrap();
+                    writeln!(writer, "{} {:p}: {:#}", i - skip_levels, addr, sym)?;
                 }
                 None => {
-                    writeln!(writer, "{} {:p}: <unknown>", i - skip_levels, addr).unwrap();
+                    writeln!(writer, "{} {:p}: <unknown>", i - skip_levels, addr)?;
                 }
             }
         }
+
+        Ok(())
     }
 }
 /// Returns a stack trace of the current call stack, up to a maximum of `LIMIT` frames.

@@ -2,7 +2,7 @@ use core::{alloc::Layout, cmp::Ordering, mem, ptr::NonNull, slice};
 
 use alloc::{alloc::AllocError, vec::Vec};
 use tmm::{
-    MapFlags, MapSource, MemError, align,
+    ContextualizedError, MapFlags, MapSource, MemError, align,
     paging::{AddressExt, heapless::HeaplessAllocator, primitives::VirtRange},
 };
 
@@ -22,7 +22,7 @@ pub struct Heap {
 
 impl Heap {
     /// Creates a new heap allocator with the specified configuration.
-    pub fn new(config: HeapConfig) -> Result<Self, MemError> {
+    pub fn new(config: HeapConfig) -> Result<Self, ContextualizedError> {
         let vrange = tmm::reserve_virtual(
             Layout::from_size_align(config.max_heap_size, config.max_heap_size).unwrap(),
         )?;

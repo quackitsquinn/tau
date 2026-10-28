@@ -1,4 +1,4 @@
-use cake::stacktrace::StackTrace;
+use cake::stacktrace::{self, StackTrace};
 
 use crate::{
     MIN_MANAGED_RANGE_SIZE, arch,
@@ -67,7 +67,9 @@ pub enum MalformedPageStructure {
     GlobalPageEncountered,
 }
 
-/// An error that can occur during memory mapping operations, such as invalid addresses, insufficient resources, or permission issues. The specific variants of this error type can be defined based on the needs of the memory manager implementation.
+/// An error that can occur during memory mapping operations, such as invalid addresses, insufficient resources, or permission issues.
+///
+/// This should be the return type of simple leaf functions or functions that only have one possible error source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum MemError {
@@ -131,7 +133,39 @@ impl MemError {
     }
 }
 
-pub struct Error {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ContextualizedError {
+    // Okay so I initially had two separate ideas for this:
+    // 1. A "contextualized" error type is a type that calls the `contextualize` method on the error type to add context to the error.
+    // 2. A "contextualized" error type is a type wraps a stack trace and a cause.
+    // I liked the first idea more at first, since I have recently been working in Go and I like how implicit it is to chain errors in Go,
+    // but the big point is easily finding the root cause of an error, and I think the second idea is better for that.
+    // Both solutions provide slightly different benefits, but it's not enough to justify having both right now.
     cause: MemError,
+    // TODO: If in the future there is a hotpath where we match err a lot, we can make this an Option<StackTrace> and only capture conditionally.
     trace: StackTrace<8>,
+}
+
+impl ContextualizedError {
+    pub fn new(cause: MemError) -> Self {
+        Self::from_raw_parts(cause, stacktrace::collect_stacktrace())
+    }
+
+    fn from_raw_parts(cause: MemError, trace: StackTrace<8>) -> Self {
+        Self { cause, trace }
+    }
+
+    pub fn cause(&self) -> MemError {
+        self.cause
+    }
+
+    pub fn trace(&self) -> &StackTrace<8> {
+        &self.trace
+    }
+}
+
+impl From<MemError> for ContextualizedError {
+    fn from(err: MemError) -> Self {
+        ContextualizedError::from_raw_parts(err, stacktrace::collect_stacktrace())
+    }
 }

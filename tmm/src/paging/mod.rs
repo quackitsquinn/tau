@@ -21,7 +21,7 @@ use cake::log::trace;
 pub use index::PageTableIndex;
 
 use crate::{
-    MapFlags, MapSource, MemError, MemoryMapping, ProvidedMemoryMapping,
+    ContextualizedError, MapFlags, MapSource, MemError, MemoryMapping, ProvidedMemoryMapping,
     arch::{Mapper, PageEntryType},
     paging::{
         fragment::GreedyFragmentMapper,
@@ -196,8 +196,6 @@ pub(crate) unsafe fn map_unchecked(
             );
         },
     }
-
-    Ok(())
 }
 
 pub(crate) unsafe fn unmap_unchecked(virt_range: VirtRange) -> Result<(), MemError> {

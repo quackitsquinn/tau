@@ -51,7 +51,7 @@ mod init;
 pub mod kernel_map;
 pub mod paging;
 
-pub use err::{Error, MemError};
+pub use err::{ContextualizedError, MemError};
 /// The minimum size of the managed range required for the memory manager to function correctly.
 pub const MIN_MANAGED_RANGE_SIZE: u64 = arch::L3_PAGE_SIZE + arch::L2_PAGE_SIZE;
 
@@ -131,20 +131,20 @@ impl InitConfig {
 /// - `managed_range` is a tuple containing the starting virtual address and size of a range of virtual memory manager will manage.
 ///   This range is used for virtual address allocation (e.g., for `alloc_virtspace`) and physical memory mapping (e.g., for `alloc_paged`),
 ///   as well as internal memory management state.
-pub unsafe fn init(init_config: InitConfig) -> Result<(), MemError> {
+pub unsafe fn init(init_config: InitConfig) -> Result<(), ContextualizedError> {
     unsafe { init::init_unchecked(EntryWalker::new(init_config.memory_map)?, init_config) }
 }
 
 /// A source of physical memory for mapping virtual addresses.
 /// This enum defines the various ways in which physical memory can be allocated or copied when creating a new mapping in the virtual address space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
 #[non_exhaustive]
 pub enum MapSource {
     /// Allocate physical memory for the mapping.
     Anon,
 }
 
+/// A structure representing a mapping between a virtual address range and a physical address range, along with the size of the mapping in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryMapping {
     /// The starting virtual address of the mapping.
@@ -156,6 +156,7 @@ pub struct MemoryMapping {
 }
 
 impl MemoryMapping {
+    /// Creates a new `MemoryMapping` instance with the specified virtual base address, physical base address, and size in bytes.
     pub fn new(virt_start: VirtAddr, phys_start: PhysAddr, size: u64) -> Option<Self> {
         if virt_start.checked_add(size).is_none() || phys_start.checked_add(size).is_none() {
             return None;
@@ -168,15 +169,18 @@ impl MemoryMapping {
         })
     }
 
+    /// Returns the virtual address range of the mapping.
     pub fn virt_range(&self) -> MemoryRange<VirtAddr> {
         MemoryRange::new(self.virt_start, self.virt_start + self.size)
     }
 
+    /// Returns the physical address range of the mapping.
     pub fn phys_range(&self) -> MemoryRange<PhysAddr> {
         MemoryRange::new(self.phys_start, self.phys_start + self.size)
     }
 }
 
+/// Directly maps a physical address range to a virtual address range of the specified size with the given flags.
 pub fn map_direct(
     mapping: MemoryMapping,
     flags: MapFlags,
@@ -186,14 +190,7 @@ pub fn map_direct(
     unsafe { paging::map_direct_unchecked(mapping, flags, parent_table_flags, op) }
 }
 
-/// Maps a virtual address range to a physical address range with the specified size
-///
-/// - `dest` is the starting virtual address of the range to be mapped.
-/// - `phys_base` is the starting physical address of the range to be mapped.
-/// - `byte_size` is the size of the range to be mapped, in bytes.
-/// - `flags` are the mapping flags that specify the permissions and attributes of the mapping (e.g., read/write permissions, caching behavior).
-// I thought about making this unsafe since it can cause undefined behavior BUT
-// said undefined behavior requires dereferencing the mapped memory, so the safety is the caller's responsibility.
+/// Maps the given source of physical memory to the specified virtual address range with the given flags.
 pub fn map(
     dest: MemoryRange<VirtAddr>,
     src: MapSource,
@@ -287,7 +284,7 @@ impl ProvidedMemoryMapping {
         }
     }
 
-    pub(crate) fn deallocate_virtual(mut self, should_deallocate_vm: bool) -> Self {
+    pub(crate) fn defer_deallocate_vm(mut self, should_deallocate_vm: bool) -> Self {
         self.anon_virt_backed = should_deallocate_vm;
         self
     }
@@ -315,7 +312,7 @@ fn make_layout_for_mapping(phys_range: MemoryRange<PhysAddr>) -> Layout {
 pub fn create_phys_mapping(
     phys_range: MemoryRange<PhysAddr>,
     flags: MapFlags,
-) -> Result<ProvidedMemoryMapping, MemError> {
+) -> Result<ProvidedMemoryMapping, ContextualizedError> {
     let virt_range = reserve_virtual(make_layout_for_mapping(phys_range))?;
     map_direct(
         MemoryMapping::new(virt_range.start(), phys_range.start(), phys_range.size()).unwrap(),
@@ -323,11 +320,12 @@ pub fn create_phys_mapping(
         None,
         &mut (),
     )
-    .map(|m| m.deallocate_virtual(true))
+    .map(|m| m.defer_deallocate_vm(true))
+    .map_err(|e| e.into())
 }
 
 /// Frees a physical memory mapping that was previously created with `create_phys_mapping`, unmapping the virtual address range and freeing the allocated virtual address space.
-pub unsafe fn free_phys_mapping(mapping: ProvidedMemoryMapping) -> Result<(), MemError> {
+pub unsafe fn free_phys_mapping(mapping: ProvidedMemoryMapping) -> Result<(), ContextualizedError> {
     unsafe {
         unmap(mapping.mapping.virt_range())?;
         if mapping.anon_virt_backed {

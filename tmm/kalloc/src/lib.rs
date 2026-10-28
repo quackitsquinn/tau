@@ -21,7 +21,7 @@ use alloc::{
 };
 use arrayvec::ArrayVec;
 use tmm::{
-    MapFlags, MapSource, MemError, align,
+    ContextualizedError, MapFlags, MapSource, MemError, align,
     corelocal::{CoreLocal, NoDefaultInit, no_default_init},
     paging::{AddressExt, heapless::HeaplessAllocator, primitives::VirtRange},
 };
@@ -53,18 +53,22 @@ impl HeapAllocator {
     /// Creates a new `HeapAllocator` with the specified configuration and initializes the heap.
     ///
     /// This is a convenience method that combines creation and initialization.
-    pub fn new(heap_config: HeapConfig) -> Result<Self, MemError> {
+    pub fn new(heap_config: HeapConfig) -> Result<Self, ContextualizedError> {
         let new = Self::new_const(heap_config);
         new.init()?;
         Ok(new)
     }
 
     /// Initializes the heap allocator by creating a new heap with the specified configuration.
-    pub fn init(&self) -> Result<(), MemError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ContextualizedError` if the heap has already been initialized or if the heap creation fails.
+    pub fn init(&self) -> Result<(), ContextualizedError> {
         // Initialize the global allocator here
         let heap = Heap::new(self.config)?;
         match &mut *self.heap.borrow_mut() {
-            Some(_) => Err(MemError::InvalidOperation),
+            Some(_) => Err(MemError::InvalidOperation.into()),
             slot @ None => {
                 *slot = Some(heap);
                 Ok(())
@@ -104,7 +108,7 @@ impl GlobalAllocator {
     }
 
     /// Returns an `Option` containing a reference to the heap allocator for the current core, if it has been initialized.
-    pub fn try_get(&self) -> Result<&HeapAllocator, MemError> {
+    pub fn try_get(&self) -> Result<&HeapAllocator, ContextualizedError> {
         let mut err = None;
         self.allocators
             .get_with_inline(|_| match HeapAllocator::new(self.cfg) {
@@ -128,8 +132,10 @@ impl GlobalAllocator {
             .get_with_inline(|cid| match HeapAllocator::new(self.cfg) {
                 Ok(allocator) => allocator,
                 Err(e) => panic!(
-                    "Failed to initialize heap allocator for core {}: {:?}",
-                    cid, e
+                    "Failed to initialize heap allocator for core {}: {:?} {}",
+                    cid,
+                    e.cause(),
+                    e.trace()
                 ),
             })
     }

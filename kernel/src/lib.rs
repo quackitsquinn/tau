@@ -6,7 +6,6 @@
 #![feature(abi_x86_interrupt)]
 #![feature(custom_test_frameworks)]
 #![feature(allocator_api)]
-#![feature(pointer_is_aligned_to)]
 #![feature(const_trait_impl)]
 #![feature(ptr_alignment_type)]
 /* TEST RUNNER */

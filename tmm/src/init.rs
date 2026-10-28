@@ -1,7 +1,7 @@
 use cake::log::{debug, info};
 
 use crate::{
-    InitConfig, MapFlags, MemError, align,
+    ContextualizedError, InitConfig, MapFlags, MemError, align,
     arch::{self, L1_PAGE_SIZE, pml4_phys},
     bitmap::{BitmapBacking, PhysicalMemoryManager, VirtualMemoryManager},
     entry_walker::EntryWalker,
@@ -16,12 +16,13 @@ use crate::{
 pub(crate) unsafe fn init_unchecked(
     mut walker: EntryWalker<'static>,
     config: InitConfig,
-) -> Result<(), MemError> {
+) -> Result<(), ContextualizedError> {
     if config.managed_range.size() < arch::L1_PAGE_SIZE * 16 {
         return Err(MemError::ScratchSpaceTooSmall {
             provided: config.managed_range.size() as u64,
             required: arch::L1_PAGE_SIZE as u64 * 16,
-        });
+        }
+        .into());
     }
 
     let cr3: Frame<Small> = pml4_phys();
