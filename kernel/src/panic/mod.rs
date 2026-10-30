@@ -52,7 +52,7 @@ pub fn panic_extended_info(pi: &PanicInfo) {
 
 pub(crate) fn panic_stacktrace() {
     let stacktrace = stacktrace::collect_stacktrace::<32>();
-    stacktrace.print(4, kserial::client::writer());
+    let _ = stacktrace.print(4, &mut kserial::client::writer());
 }
 
 static PANICKED: Fuse = Fuse::new();

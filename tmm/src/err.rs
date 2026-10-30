@@ -201,6 +201,11 @@ impl fmt::Display for ContextualizedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Error: {}", self.cause)?;
         writeln!(f, "Stack trace:")?;
-        self.trace.print(0, f)
+        self.trace.print(0, f)?;
+        writeln!(f, "Cause trace:")?;
+        for cause in &self.context_stack {
+            writeln!(f, "\t {cause}")?;
+        }
+        Ok(())
     }
 }

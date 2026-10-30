@@ -33,9 +33,7 @@ impl<const LIMIT: usize> Display for StackTrace<LIMIT> {
 
 impl<const LIMIT: usize> StackTrace<LIMIT> {
     /// Prints the stack trace to the given writer, skipping the first `skip_levels` frames.
-    pub fn print(&self, skip_levels: usize, writer: impl Write) -> fmt::Result {
-        let mut writer = writer;
-
+    pub fn print(&self, skip_levels: usize, writer: &mut impl Write) -> fmt::Result {
         for (i, frame) in self.frames.iter().enumerate() {
             if i < skip_levels {
                 continue;
