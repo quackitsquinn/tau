@@ -5,6 +5,7 @@ use crate::{
     arch::{self, L1_PAGE_SIZE, pml4_phys},
     bitmap::{BitmapBacking, PhysicalMemoryManager, VirtualMemoryManager},
     entry_walker::EntryWalker,
+    err::Contextualize,
     paging::{
         Address, AddressExt, Frame, PageTable, Small, accessor,
         asm::{self, InactiveAddressSpace},
@@ -21,8 +22,8 @@ pub(crate) unsafe fn init_unchecked(
         return Err(MemError::ScratchSpaceTooSmall {
             provided: config.managed_range.size() as u64,
             required: arch::L1_PAGE_SIZE as u64 * 16,
-        }
-        .into());
+        })
+        .with_ctx("managed range invalid");
     }
 
     let cr3: Frame<Small> = pml4_phys();
@@ -52,7 +53,11 @@ pub(crate) unsafe fn init_unchecked(
     // This is necessary to perform any virtual memory operations, including mapping the scratch space.
     let bootstrap_table =
         unsafe { InactiveAddressSpace::bootstrap(cr3, config.zero_page, config.recursive_idx) };
-    unsafe { bootstrap_table.activate()? };
+    unsafe {
+        bootstrap_table
+            .activate()
+            .with_ctx("failed to activate bootstrap table")?
+    };
 
     info!("Found {} bytes of usable memory", walker.usable_memory());
 
@@ -75,7 +80,8 @@ pub(crate) unsafe fn init_unchecked(
             None,
             &mut DataAllocator(&mut walker),
             &mut (),
-        )?;
+        )
+        .with_ctx("failed to map managed range")?;
     }
 
     let entries = unsafe {
@@ -95,7 +101,10 @@ pub(crate) unsafe fn init_unchecked(
     unsafe { vmm.mark_allocated(config.managed_range.start(), n_bytes) }
 
     info!("Initializing physical memory manager with scratch space");
-    let pmm = unsafe { PhysicalMemoryManager::init(walker, &mut vmm)? };
+    let pmm = unsafe {
+        PhysicalMemoryManager::init(walker, &mut vmm)
+            .with_ctx("failed to init physical memory manager")?
+    };
     info!("Physical memory manager initialized successfully");
 
     asm::set_vmm(vmm);

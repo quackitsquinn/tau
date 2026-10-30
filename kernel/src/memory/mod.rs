@@ -18,6 +18,7 @@ use cake::{
 use kalloc::{GlobalAllocator, HeapConfig};
 use tmm::{
     ContextualizedError, InitConfig, MapFlags, MapSource, MemError,
+    err::Contextualize,
     paging::{
         Address, AddressExt, MemoryFragment, MemoryRange, PageTable, PageTableEntry,
         PageTableIndex, VirtAddr, asm::InactiveAddressSpace, heapless::HeaplessAllocator,
@@ -161,7 +162,8 @@ unsafe fn init_tmm() -> Result<PageTableIndex, ContextualizedError> {
     let init =
         InitConfig::find_scratch_page(recursive_idx, map::tmm_managed_range::RANGE, unsafe {
             mem::transmute(memory_map)
-        })?;
+        })
+        .with_ctx("failed to create config")?;
 
     info!("Initializing tmm {:?}", init);
     unsafe { tmm::init(init) }?;
@@ -169,10 +171,13 @@ unsafe fn init_tmm() -> Result<PageTableIndex, ContextualizedError> {
 
     // Copy the kernel mappings into the managed range so it isn't lost when the kernel is remapped.
     let alloc = HeaplessAllocator::new(MapFlags::WRITABLE);
-    let kernel_elf = cake::kernel_elf().ok_or(MemError::Uninit("kernel elf"))?;
+    let kernel_elf =
+        cake::kernel_elf().ok_or(MemError::Uninit("kernel elf").with_ctx("kernel elf"))?;
     let alloc = match alloc.allocate(Layout::array::<u8>(kernel_elf.data.len()).unwrap()) {
         Ok(ptr) => ptr,
-        Err(_) => return Err(MemError::OutOfMemory.into()),
+        Err(_) => {
+            return Err(MemError::OutOfMemory.with_ctx("failed to allocate memory for kernel elf"));
+        }
     };
     unsafe {
         ptr::copy_nonoverlapping(
@@ -227,7 +232,7 @@ use tmm::kernel_map;
 
 kernel_map! {
     . = (higher_half + 512 GiB),
-    TMM_MANAGED_RANGE = 2 GiB; align 1 GiB,
+    TMM_MANAGED_RANGE = 3 GiB; align 1 GiB,
     TMM_ZERO_PAGE = Large; align Large,
     KERNEL_HEAP = 16 MiB; align 2 MiB,
     KERNEL_PHYS_MAP = 256 MiB; align 2 MiB,

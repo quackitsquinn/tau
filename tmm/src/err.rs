@@ -1,5 +1,6 @@
 use core::fmt;
 
+use arrayvec::ArrayVec;
 use cake::stacktrace::{self, StackTrace};
 
 use crate::{
@@ -127,6 +128,10 @@ pub enum MemError {
 }
 
 impl MemError {
+    pub fn with_ctx(self, ctx: &'static str) -> ContextualizedError {
+        ContextualizedError::new(self, ctx)
+    }
+
     pub(crate) fn scratch_space_too_small(provided: u64) -> Self {
         Self::ScratchSpaceTooSmall {
             provided,
@@ -146,15 +151,24 @@ pub struct ContextualizedError {
     cause: MemError,
     // TODO: If in the future there is a hotpath where we match err a lot, we can make this an Option<StackTrace> and only capture conditionally.
     trace: StackTrace<8>,
+    context_stack: ArrayVec<&'static str, 8>,
 }
 
 impl ContextualizedError {
-    pub fn new(cause: MemError) -> Self {
-        Self::from_raw_parts(cause, stacktrace::collect_stacktrace())
+    pub fn new(cause: MemError, reason: &'static str) -> Self {
+        Self::from_raw_parts(cause, stacktrace::collect_stacktrace(), reason)
     }
 
-    fn from_raw_parts(cause: MemError, trace: StackTrace<8>) -> Self {
-        Self { cause, trace }
+    fn from_raw_parts(cause: MemError, trace: StackTrace<8>, reason: &'static str) -> Self {
+        Self {
+            cause,
+            trace,
+            context_stack: {
+                let mut av = ArrayVec::new();
+                av.push(reason);
+                av
+            },
+        }
     }
 
     pub fn cause(&self) -> MemError {
@@ -166,9 +180,20 @@ impl ContextualizedError {
     }
 }
 
-impl From<MemError> for ContextualizedError {
-    fn from(err: MemError) -> Self {
-        ContextualizedError::from_raw_parts(err, stacktrace::collect_stacktrace())
+pub trait Contextualize<T> {
+    fn with_ctx(self, ctx: &'static str) -> Result<T, ContextualizedError>;
+}
+
+impl<T> Contextualize<T> for Result<T, MemError> {
+    fn with_ctx(self, ctx: &'static str) -> Result<T, ContextualizedError> {
+        match self {
+            Ok(inner) => Ok(inner),
+            Err(err) => Err(ContextualizedError::from_raw_parts(
+                err,
+                stacktrace::collect_stacktrace(),
+                ctx,
+            )),
+        }
     }
 }
 

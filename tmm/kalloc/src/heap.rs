@@ -3,6 +3,7 @@ use core::{alloc::Layout, cmp::Ordering, mem, ptr::NonNull, slice};
 use alloc::{alloc::AllocError, vec::Vec};
 use tmm::{
     ContextualizedError, MapFlags, MapSource, MemError, align,
+    err::Contextualize,
     paging::{AddressExt, heapless::HeaplessAllocator, primitives::VirtRange},
 };
 
@@ -25,7 +26,8 @@ impl Heap {
     pub fn new(config: HeapConfig) -> Result<Self, ContextualizedError> {
         let vrange = tmm::reserve_virtual(
             Layout::from_size_align(config.max_heap_size, config.max_heap_size).unwrap(),
-        )?;
+        )
+        .with_ctx("failed to reserve virtual memory for heap")?;
 
         tmm::map(
             vrange.truncate(config.initial_heap_size as u64),
@@ -33,7 +35,8 @@ impl Heap {
             MapFlags::WRITABLE,
             None,
             &mut (),
-        )?;
+        )
+        .with_ctx("failed to map memory for heap")?;
 
         let ha = HeaplessAllocator::new(MapFlags::WRITABLE);
 

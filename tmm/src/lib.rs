@@ -29,6 +29,7 @@ pub use pastey as _pastey;
 
 use crate::{
     entry_walker::EntryWalker,
+    err::Contextualize,
     paging::{
         Address, AddressExt, FragmentManager, FragmentSize, Frame, Large, MemoryFragment, Page,
         PageTableIndex, PhysAddr, VirtAddr,
@@ -132,7 +133,12 @@ impl InitConfig {
 ///   This range is used for virtual address allocation (e.g., for `alloc_virtspace`) and physical memory mapping (e.g., for `alloc_paged`),
 ///   as well as internal memory management state.
 pub unsafe fn init(init_config: InitConfig) -> Result<(), ContextualizedError> {
-    unsafe { init::init_unchecked(EntryWalker::new(init_config.memory_map)?, init_config) }
+    unsafe {
+        init::init_unchecked(
+            EntryWalker::new(init_config.memory_map).with_ctx("failed to create entry walker")?,
+            init_config,
+        )
+    }
 }
 
 /// A source of physical memory for mapping virtual addresses.
@@ -313,7 +319,8 @@ pub fn create_phys_mapping(
     phys_range: MemoryRange<PhysAddr>,
     flags: MapFlags,
 ) -> Result<ProvidedMemoryMapping, ContextualizedError> {
-    let virt_range = reserve_virtual(make_layout_for_mapping(phys_range))?;
+    let virt_range = reserve_virtual(make_layout_for_mapping(phys_range))
+        .with_ctx("failed to reserve virtual memory")?;
     map_direct(
         MemoryMapping::new(virt_range.start(), phys_range.start(), phys_range.size()).unwrap(),
         flags,
@@ -321,18 +328,22 @@ pub fn create_phys_mapping(
         &mut (),
     )
     .map(|m| m.defer_deallocate_vm(true))
-    .map_err(|e| e.into())
+    .map_err(|e| {
+        unsafe { free_virtual(virt_range, make_layout_for_mapping(phys_range)) };
+        e.with_ctx("failed to map memory")
+    })
 }
 
 /// Frees a physical memory mapping that was previously created with `create_phys_mapping`, unmapping the virtual address range and freeing the allocated virtual address space.
 pub unsafe fn free_phys_mapping(mapping: ProvidedMemoryMapping) -> Result<(), ContextualizedError> {
     unsafe {
-        unmap(mapping.mapping.virt_range())?;
+        unmap(mapping.mapping.virt_range()).with_ctx("failed to unmap memory")?;
         if mapping.anon_virt_backed {
             free_virtual(
                 mapping.mapping.virt_range(),
                 make_layout_for_mapping(mapping.mapping.phys_range()),
-            )?;
+            )
+            .with_ctx("failed to free underlying virtual memory")?;
         }
     }
 

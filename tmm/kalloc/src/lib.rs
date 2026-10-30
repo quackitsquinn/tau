@@ -65,15 +65,13 @@ impl HeapAllocator {
     ///
     /// Returns a `ContextualizedError` if the heap has already been initialized or if the heap creation fails.
     pub fn init(&self) -> Result<(), ContextualizedError> {
-        // Initialize the global allocator here
-        let heap = Heap::new(self.config)?;
-        match &mut *self.heap.borrow_mut() {
-            Some(_) => Err(MemError::InvalidOperation.into()),
-            slot @ None => {
-                *slot = Some(heap);
-                Ok(())
-            }
+        let mut heap_ref = self.heap.borrow_mut();
+        if heap_ref.is_some() {
+            return Err(MemError::InvalidOperation.with_ctx("already init"));
         }
+        let heap = Heap::new(self.config)?;
+        *heap_ref = Some(heap);
+        Ok(())
     }
 }
 
