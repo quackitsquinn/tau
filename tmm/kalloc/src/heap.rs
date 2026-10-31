@@ -277,6 +277,10 @@ fn find_index<T, A>(data: &[T], indices: &[u32], value: A, key: impl Fn(u32, &T)
 where
     A: Ord,
 {
+    if indices.is_empty() {
+        return 0;
+    }
+
     let mut low = 0;
     let mut high = data.len();
     while low < high {
