@@ -1,6 +1,6 @@
 //! A helper struct for iterating over memory map entries and calculating the total usable memory.
 use core::fmt::Debug;
-use core::{mem, slice};
+use core::{mem, ops, slice};
 
 use arrayvec::ArrayVec;
 use cake::limine::memory_map::{Entry, EntryType};
@@ -20,7 +20,7 @@ const MAX_FRAGMENTS: usize = 0x40;
 #[derive(Debug)]
 pub struct EntryWalker<'a> {
     /// The underlying entries provided from Limine
-    pub entries: &'a [&'a LimineEntry],
+    pub entries: EntrySource<'a>,
     current: MemoryRegion,
     current_idx: usize,
     fragments: ArrayVec<MemoryRegion, MAX_FRAGMENTS>,
@@ -74,22 +74,58 @@ impl Debug for MemoryRegion {
     }
 }
 
+/// A wrapper around a slice of Limine memory map entries that can either be borrowed or owned.
+#[derive(Clone)]
+pub enum EntrySource<'a> {
+    /// A borrowed slice of Limine memory map entries.
+    Borrowed(&'a [LimineEntry]),
+    /// An owned vector of Limine memory map entries.
+    Owned(ArrayVec<LimineEntry, 32>),
+}
+
+impl<'a> Debug for EntrySource<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EntrySource::Borrowed(entries) => f
+                .debug_tuple("EntrySource::Borrowed")
+                .field(&format_args!("{:?}", entries))
+                .finish(),
+            EntrySource::Owned(entries) => f
+                .debug_tuple("EntrySource::Owned")
+                .field(&format_args!("{:?}", entries))
+                .finish(),
+        }
+    }
+}
+
+impl<'a> From<&'a [LimineEntry]> for EntrySource<'a> {
+    fn from(entries: &'a [LimineEntry]) -> Self {
+        EntrySource::Borrowed(entries)
+    }
+}
+
+impl<'a> ops::Deref for EntrySource<'a> {
+    type Target = [LimineEntry];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            EntrySource::Borrowed(entries) => entries,
+            EntrySource::Owned(entries) => entries.as_slice(),
+        }
+    }
+}
+
 impl<'a> EntryWalker<'a> {
     /// Creates a new `EntryWalker` with the given slice of memory map entries.
     ///
     /// # Safety
     ///
     /// The caller must ensure that the provided memory map entries are valid and that the layout described by the entries remains valid for the lifetime of the `EntryWalker`.
-    pub unsafe fn new(memory_map: &'a [&'a Entry]) -> Result<Self, MemError> {
+    pub unsafe fn new(memory_map: EntrySource<'a>) -> Result<Self, MemError> {
         let entries = unsafe {
-            slice::from_raw_parts(memory_map.as_ptr() as *const &LimineEntry, memory_map.len())
+            slice::from_raw_parts(memory_map.as_ptr() as *const LimineEntry, memory_map.len())
         };
 
-        Self::from_limine_entries(entries)
-    }
-
-    /// Creates a new `EntryWalker` with the given slice of Limine memory map entries.
-    pub(crate) fn from_limine_entries(entries: &'a [&'a LimineEntry]) -> Result<Self, MemError> {
         let (current_idx, current) = entries
             .iter()
             .enumerate()
@@ -97,17 +133,22 @@ impl<'a> EntryWalker<'a> {
             .ok_or(MemError::OutOfMemory)?;
 
         Ok(Self {
-            entries,
-            current: MemoryRegion::from(**current),
+            entries: memory_map,
+            current: MemoryRegion::from(*current),
             current_idx,
             fragments: ArrayVec::new(),
         })
     }
 
+    /// Creates a new `EntryWalker` with the given slice of Limine memory map entries.
+    pub(crate) unsafe fn from_limine_entries(entries: &'a [LimineEntry]) -> Result<Self, MemError> {
+        unsafe { Self::new(EntrySource::Borrowed(entries)) }
+    }
+
     /// Returns the amount of usable memory in bytes.
     pub fn usable_memory(&self) -> u64 {
         let mut total = 0;
-        for entry in self.entries {
+        for entry in &*self.entries {
             if matches!(
                 entry.entry_type,
                 EntryType::USABLE | EntryType::BOOTLOADER_RECLAIMABLE | EntryType::ACPI_RECLAIMABLE
@@ -135,7 +176,7 @@ impl<'a> EntryWalker<'a> {
         while self.current_idx < self.entries.len() {
             let entry = self.entries[self.current_idx];
             if entry.entry_type == EntryType::USABLE {
-                self.current = MemoryRegion::from(*entry);
+                self.current = MemoryRegion::from(entry);
                 return Ok(self.current);
             }
             self.current_idx += 1;
@@ -226,7 +267,7 @@ impl Iterator for UsedRegions<'_> {
             let entry = self.walker.entries[self.index];
             self.index += 1;
             if entry.entry_type == EntryType::USABLE {
-                return Some(MemoryRegion::from(*entry));
+                return Some(MemoryRegion::from(entry));
             }
         }
 

@@ -7,8 +7,9 @@ use core::{
 };
 
 use crate::{
-    STACK_SIZE, declare_module,
-    requests::{MEMORY_MAP, PHYSICAL_MEMORY_OFFSET},
+    STACK_SIZE,
+    bootloader::{self},
+    declare_module,
 };
 use alloc::{alloc::Allocator, vec::Vec};
 use cake::{
@@ -24,9 +25,6 @@ use tmm::{
         PageTableIndex, VirtAddr, asm::InactiveAddressSpace, heapless::HeaplessAllocator,
     },
 };
-
-pub mod elf_req_data;
-pub mod req_data;
 
 /// Enables or disables allocation debugging based on the ALLOC_DEBUG environment variable.
 pub const ALLOC_DEBUG: bool = option_env!("ALLOC_DEBUG").is_some();
@@ -155,15 +153,15 @@ fn map_kernel(recursive_idx: PageTableIndex) -> Result<!, MemError> {
 }
 
 unsafe fn init_tmm() -> Result<PageTableIndex, ContextualizedError> {
-    let memory_map = MEMORY_MAP.lock_limine();
-    let memory_map = memory_map.entries();
+    let memory_map = bootloader::memory_map();
     let recursive_idx = unsafe { find_set_recursive_entry().unwrap() };
 
-    let init =
-        InitConfig::find_scratch_page(recursive_idx, map::tmm_managed_range::RANGE, unsafe {
-            mem::transmute(memory_map)
-        })
-        .with_ctx("failed to create config")?;
+    let init = InitConfig::find_scratch_page(
+        recursive_idx,
+        map::tmm_managed_range::RANGE,
+        bootloader::memory_map(),
+    )
+    .with_ctx("failed to create config")?;
 
     info!("Initializing tmm {:?}", init);
     unsafe { tmm::init(init) }?;
@@ -197,7 +195,7 @@ const RECURSIVE_RANGE_END: PageTableIndex =
 unsafe fn find_set_recursive_entry() -> Option<PageTableIndex> {
     let l4_phys = tmm::arch::pml4_phys();
     let pml4_vaddr = l4_phys
-        .translate_offset(*PHYSICAL_MEMORY_OFFSET.get().unwrap())
+        .translate_offset(bootloader::physical_memory_offset())
         .expect("Failed to translate PML4 physical address to virtual address");
     let root = unsafe { &mut *(pml4_vaddr.as_mut_ptr::<PageTable>()) };
     for i in PageTableIndex::iter_range(RECURSIVE_RANGE_START..RECURSIVE_RANGE_END).rev() {

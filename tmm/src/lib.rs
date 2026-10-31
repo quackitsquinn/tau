@@ -16,6 +16,7 @@
 use core::{
     alloc::Layout,
     fmt::{Debug, Display},
+    mem,
 };
 
 extern crate alloc;
@@ -28,13 +29,14 @@ use cake::{limine::memory_map, stacktrace::StackTrace};
 pub use pastey as _pastey;
 
 use crate::{
-    entry_walker::EntryWalker,
+    entry_walker::{EntrySource, EntryWalker},
     err::Contextualize,
     paging::{
         Address, AddressExt, FragmentManager, FragmentSize, Frame, Large, MemoryFragment, Page,
         PageTableIndex, PhysAddr, VirtAddr,
         accessor::CopyMappingError,
         asm,
+        limine::LimineEntry,
         operation::OperationAllSizes,
         primitives::{AnyFragment, MemoryRange, PageClass, PhysRange, VirtRange},
     },
@@ -57,7 +59,7 @@ pub use err::{ContextualizedError, MemError};
 pub const MIN_MANAGED_RANGE_SIZE: u64 = arch::L3_PAGE_SIZE + arch::L2_PAGE_SIZE;
 
 /// The configuration for initializing the memory manager.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct InitConfig {
     /// The recursive index used for the recursive page table mapping. This index is used to access the page tables in a
     /// recursive manner, allowing for efficient management of virtual memory.
@@ -70,9 +72,12 @@ pub struct InitConfig {
     pub zero_page: Page<Large>,
     /// The physical memory map of the system, typically provided by the bootloader.
     ///
-    // TODO: It seems reasonable to just make this a ArrayVec or something, since this is *super* clunky if you aren't using limine.
-    pub memory_map: &'static [&'static memory_map::Entry],
+    pub memory_map: &'static [LimineEntry],
 }
+
+/// The maximum number of memory map entries that can be handled by the memory manager.
+// TODO: tweak CAP based on real systems
+pub const MEMORY_MAP_CAPACITY: usize = 32;
 
 impl Debug for InitConfig {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -91,7 +96,7 @@ impl InitConfig {
     pub fn find_scratch_page(
         recursive_idx: PageTableIndex,
         managed_range: MemoryRange<VirtAddr>,
-        memory_map: &'static [&'static memory_map::Entry],
+        memory_map: &'static [memory_map::Entry],
     ) -> Result<Self, MemError> {
         if managed_range.size() < arch::L3_PAGE_SIZE {
             return Err(MemError::scratch_space_too_small(managed_range.size()));
@@ -115,7 +120,7 @@ impl InitConfig {
             recursive_idx,
             managed_range,
             zero_page,
-            memory_map,
+            memory_map: unsafe { mem::transmute(memory_map) },
         })
     }
 }
@@ -135,7 +140,8 @@ impl InitConfig {
 pub unsafe fn init(init_config: InitConfig) -> Result<(), ContextualizedError> {
     unsafe {
         init::init_unchecked(
-            EntryWalker::new(init_config.memory_map).with_ctx("failed to create entry walker")?,
+            EntryWalker::new(EntrySource::Borrowed(init_config.memory_map))
+                .with_ctx("failed to create entry walker")?,
             init_config,
         )
     }

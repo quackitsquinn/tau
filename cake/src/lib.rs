@@ -5,7 +5,6 @@
 
 mod fuse;
 pub mod id;
-mod limine_request;
 mod module;
 mod oncemut;
 mod oncerw;
@@ -18,10 +17,6 @@ use core::mem;
 pub use id::{core_count, core_id, init_core_id, set_core_count};
 use lock_api::MappedRwLockReadGuard;
 
-/* Crate Exports */
-pub use self::limine_request::{
-    LimineData, LimineRequest, RawLimineRequest, requests_terminated, terminate_requests,
-};
 pub use fuse::Fuse;
 use kelp::Elf;
 pub use limine;

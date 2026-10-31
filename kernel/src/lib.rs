@@ -35,7 +35,7 @@ pub mod output;
 pub mod panic;
 pub mod pci;
 //pub mod proc;
-pub mod requests;
+pub mod bootloader;
 pub mod serial;
 pub mod testing;
 
@@ -90,7 +90,7 @@ pub(crate) unsafe fn init_kernel_services() {
 fn init_stage0() {
     serial::MODULE.init();
     output::MODULE.init();
-    requests::MODULE.init();
+    bootloader::MODULE.init();
     panic::MODULE.init();
     interrupts::MODULE.init();
     get_serial_client().enable_packet_support();
@@ -102,11 +102,11 @@ fn init_stage0() {
 
 extern "C" fn init_stage1() -> ! {
     info!("Reached init_stage1, initializing kernel services...");
+    #[cfg(not(test))] // Tests don't have a display
+    display::MODULE.init();
     gdt::MODULE.init();
     hardware::MODULE.init();
     mp::PREINIT_MODULE.init();
-    #[cfg(not(test))] // Tests don't have a display
-    display::MODULE.init();
     mp::MODULE.init();
     pci::MODULE.init();
     //proc::MODULE.init();

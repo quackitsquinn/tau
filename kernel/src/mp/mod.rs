@@ -18,7 +18,6 @@ use crate::{
 
 pub mod ioapic;
 pub mod lapic;
-pub mod req_data;
 
 mod core_local;
 mod mp_setup;
@@ -28,8 +27,6 @@ pub use mp_setup::{
 };
 
 pub use core_local::{CloneBootstrap, ConstructMethod, Constructor, CoreLocal};
-
-pub use req_data::{ApplicationCore, ApplicationCores};
 
 /// The local APIC for the current core.
 pub static LAPIC: Lapic = Lapic::new();

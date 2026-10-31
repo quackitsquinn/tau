@@ -8,15 +8,14 @@ use cake::log::info;
 use cake::{Once, RwLock, declare_module};
 pub use context::CoreContext;
 
-use crate::{mp::mp_setup::trampoline::prepare_cpu, requests::MP_INFO};
+use crate::bootloader;
+use crate::mp::mp_setup::trampoline::prepare_cpu;
 
 pub(super) static CORES: Once<BTreeMap<u32, &'static RwLock<CoreContext>>> = Once::new();
 pub(super) static CORE_COUNT: Once<usize> = Once::new();
 
 pub(super) fn init() -> Result<(), Infallible> {
-    let mp = MP_INFO.lock_limine();
-
-    let cpus = mp.cpus();
+    let cpus = unsafe { bootloader::read_limine_mp_info() };
 
     let ap_cpus = cpus.len() - 1;
     info!("Found {} apCPUs", ap_cpus);

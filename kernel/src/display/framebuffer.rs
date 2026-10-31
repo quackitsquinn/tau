@@ -1,8 +1,6 @@
 use core::fmt::Debug;
 
-use cake::log::info;
-
-use crate::display::req_data::FramebufferInfo;
+use cake::{limine, log::info};
 
 use super::color::Color;
 /// A representation of a framebuffer.
@@ -19,28 +17,31 @@ pub struct Framebuffer {
 
 impl Framebuffer {
     /// Create a new framebuffer.
-    pub unsafe fn new(fb: &FramebufferInfo) -> Framebuffer {
-        if fb.bpp % 8 != 0 {
+    pub unsafe fn new(fb: &limine::framebuffer::Framebuffer<'_>) -> Framebuffer {
+        if fb.bpp() % 8 != 0 {
             panic!("Non-byte aligned framebuffers are not supported.");
-        } else if fb.bpp / 8 < 3 {
+        } else if fb.bpp() / 8 < 3 {
             panic!("Framebuffers with less than 3 bytes per pixel are not supported.");
         }
 
         info!(
             "Framebuffer: {}x{} {}bpp ({})",
-            fb.width,
-            fb.height,
-            fb.bpp,
-            fb.pitch * fb.height
+            fb.width(),
+            fb.height(),
+            fb.bpp(),
+            fb.pitch() * fb.height()
         );
         Self {
-            width: fb.width as usize,
-            height: fb.height as usize,
-            pitch: fb.pitch as usize,
-            bpp: (fb.bpp / 8),
+            width: fb.width() as usize,
+            height: fb.height() as usize,
+            pitch: fb.pitch() as usize,
+            bpp: (fb.bpp() / 8),
             buffer: unsafe {
                 // Safety: We calculate the buffer size based on the pitch and height of the framebuffer.
-                core::slice::from_raw_parts_mut(fb.ptr(), fb.pitch as usize * fb.height as usize)
+                core::slice::from_raw_parts_mut(
+                    fb.addr(),
+                    fb.pitch() as usize * fb.height() as usize,
+                )
             },
         }
     }

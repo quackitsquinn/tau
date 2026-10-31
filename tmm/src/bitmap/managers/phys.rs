@@ -41,7 +41,7 @@ impl PhysicalMemoryManager {
         mut entry_walker: EntryWalker,
         vmm: &mut VirtualMemoryManager,
     ) -> Result<Self, MemError> {
-        let entries = entry_walker.entries;
+        let entries = entry_walker.entries.clone();
         let n_avail = entries
             .iter()
             .filter(|e| e.entry_type == EntryType::USABLE)
