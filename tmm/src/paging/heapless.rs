@@ -8,7 +8,8 @@ use alloc::alloc::Allocator;
 use cake::log::error;
 
 use crate::{
-    MapFlags, MapSource, align,
+    ContextualizedError, MapFlags, MapSource, align,
+    err::Contextualize,
     paging::{AddressExt, primitives::VirtRange},
 };
 
@@ -23,13 +24,57 @@ impl HeaplessAllocator {
         Self(flags)
     }
 
+    /// Allocates the given layout and returns a pointer to it if the allocation is successful.
+    pub fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, ContextualizedError> {
+        let layout = create_page_layout(layout);
+        let vbase =
+            crate::reserve_virtual(layout).with_ctx("failed to reserve backing virtual memory")?;
+
+        if let Err(e) = crate::map(vbase, MapSource::Anon, self.0, None, &mut ()) {
+            if let Err(e) = unsafe { crate::free_virtual(vbase, layout) } {
+                error!(
+                    "Failed to free virtual memory for heapless allocator: {:?}",
+                    e
+                );
+            }
+            return Err(e).with_ctx("failed to map underlying memory");
+        }
+
+        let ptr = vbase.start().as_mut_ptr::<u8>();
+        let slice = core::ptr::slice_from_raw_parts_mut(ptr, layout.size());
+        Ok(core::ptr::NonNull::new(slice).unwrap())
+    }
+
+    fn deallocate(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        layout: core::alloc::Layout,
+    ) -> Result<(), ContextualizedError> {
+        let layout = create_page_layout(layout);
+        let vbase = crate::VirtAddr::from_ptr(ptr.as_ptr()).unwrap();
+        // SAFETY: Upheld by the caller
+        let range = VirtRange::new_len(vbase, layout.size() as u64);
+        unsafe { crate::unmap(range) }.map_err(|e| {
+            let _ = unsafe { crate::free_virtual(range, layout) };
+            e.with_ctx("failed to unmap memory")
+        })?;
+
+        unsafe { crate::free_virtual(range, layout) }
+            .map_err(|e| e.with_ctx("failed to free underlying virtual memory"))?;
+
+        Ok(())
+    }
+
     fn reallocate_fallback(
         &self,
         ptr: core::ptr::NonNull<u8>,
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<core::ptr::NonNull<[u8]>, alloc::alloc::AllocError> {
-        let new_ptr = self.allocate(new_layout)?;
+        let new_ptr = Allocator::allocate(self, new_layout)?;
         unsafe {
             core::ptr::copy_nonoverlapping(
                 ptr.as_ptr(),
@@ -47,39 +92,16 @@ unsafe impl Allocator for HeaplessAllocator {
         &self,
         layout: core::alloc::Layout,
     ) -> Result<core::ptr::NonNull<[u8]>, alloc::alloc::AllocError> {
-        let layout = create_page_layout(layout);
-        let vbase = crate::reserve_virtual(layout).map_err(|_| alloc::alloc::AllocError)?;
-
-        if let Err(e) = crate::map(vbase, MapSource::Anon, self.0, None, &mut ()) {
-            // SAFETY: We just reserved this virtual memory, so it is safe to free it.
-            error!(
-                "Failed to map virtual memory for heapless allocator: {:?}",
-                e
-            );
-            if let Err(e) = unsafe { crate::free_virtual(vbase, layout) } {
-                error!(
-                    "Failed to free virtual memory for heapless allocator: {:?}",
-                    e
-                );
-            }
-            return Err(alloc::alloc::AllocError);
-        }
-
-        let ptr = vbase.start().as_mut_ptr::<u8>();
-        let slice = core::ptr::slice_from_raw_parts_mut(ptr, layout.size());
-        Ok(core::ptr::NonNull::new(slice).unwrap())
+        self.allocate(layout).map_err(|e| {
+            error!("allocate failed: {}", e);
+            alloc::alloc::AllocError
+        })
     }
 
     unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-        let layout = create_page_layout(layout);
-        let vbase = crate::VirtAddr::from_ptr(ptr.as_ptr()).unwrap();
-        // SAFETY: Upheld by the caller
-        if let Err(e) = unsafe { crate::unmap(VirtRange::new_len(vbase, layout.size() as u64)) } {
-            error!(
-                "Failed to unmap virtual memory for heapless allocator: {:?}",
-                e
-            );
-        }
+        let _ = self
+            .deallocate(ptr, layout)
+            .inspect_err(|e| error!("deallocate failed: {}", e));
     }
 
     unsafe fn grow(

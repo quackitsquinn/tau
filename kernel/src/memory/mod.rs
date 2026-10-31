@@ -173,12 +173,7 @@ unsafe fn init_tmm() -> Result<PageTableIndex, ContextualizedError> {
     let alloc = HeaplessAllocator::new(MapFlags::WRITABLE);
     let kernel_elf =
         cake::kernel_elf().ok_or(MemError::Uninit("kernel elf").with_ctx("kernel elf"))?;
-    let alloc = match alloc.allocate(Layout::array::<u8>(kernel_elf.data.len()).unwrap()) {
-        Ok(ptr) => ptr,
-        Err(_) => {
-            return Err(MemError::OutOfMemory.with_ctx("failed to allocate memory for kernel elf"));
-        }
-    };
+    let alloc = alloc.allocate(Layout::array::<u8>(kernel_elf.data.len()).unwrap())?;
     unsafe {
         ptr::copy_nonoverlapping(
             kernel_elf.data.as_ptr(),

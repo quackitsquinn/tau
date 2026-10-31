@@ -335,6 +335,14 @@ where
         self.end.as_u64() - self.start.as_u64()
     }
 
+    /// Returns the alignment of the start address of this range
+    pub const fn start_align(&self) -> Alignment {
+        match self.start.as_u64().lowest_one() {
+            Some(z) => return Alignment::new(1 << z as u64).unwrap(),
+            None => return Alignment::MIN,
+        }
+    }
+
     /// Returns a new MemoryRange that is aligned up to the next multiple of the given fragment size.
     /// Returns `None` if the aligned start address is greater than or equal to the end address.
     pub const fn align_up_to<S: FragmentSize>(&self) -> Option<MemoryRange<A>> {

@@ -4,10 +4,14 @@ use core::{
     mem::{Alignment, MaybeUninit},
 };
 
-use cake::{limine::memory_map::EntryType, log::info};
+use cake::{
+    limine::memory_map::EntryType,
+    log::{error, info},
+    trace_disabled,
+};
 
 use crate::{
-    MapFlags, MemError,
+    MapFlags, MemError, align,
     bitmap::{
         Bitmap, BitmapBacking, VirtualMemoryManager,
         managers::{
@@ -17,8 +21,8 @@ use crate::{
     },
     entry_walker::EntryWalker,
     paging::{
-        Address, AddressExt, FragmentManager, FragmentSize, Frame, FullManager, MemoryFragment,
-        PhysAddr, Small,
+        Address, AddressExt, FragmentManager, FragmentSize, Frame, FullManager, Large, Medium,
+        MemoryFragment, PhysAddr, Small,
         map::DataAllocator,
         map_from,
         primitives::{FrameClass, MemoryRange},
@@ -110,11 +114,10 @@ impl PhysicalMemoryManager {
         walker: &mut EntryWalker,
         vmm: &mut VirtualMemoryManager,
     ) -> Result<BitmapEntry, crate::MemError> {
-        let needed_entries = entries_for_bytes(range.size());
-        let bits = n_pages_for_bytes(range.size());
-        let needed_bytes = needed_entries * core::mem::size_of::<u64>() as u64;
+        let placed = EntryPlacement::place(range);
+        info!("placing bitmap: {:?}", placed);
         let allocated_range = vmm
-            .allocate(Layout::from_size_align(needed_bytes as usize, 8).unwrap())
+            .allocate(placed.buf_layout)
             .ok_or(MemError::OutOfMemory)?;
         unsafe {
             map_from(
@@ -129,7 +132,7 @@ impl PhysicalMemoryManager {
         let bitmap_slice = unsafe {
             core::slice::from_raw_parts_mut(
                 allocated_range.start().as_mut_ptr::<u64>(),
-                needed_entries as usize,
+                placed.n_entries,
             )
         };
 
@@ -138,12 +141,12 @@ impl PhysicalMemoryManager {
         }
 
         Ok(BitmapEntry {
-            start: range.start(),
+            start: placed.base,
             bitmap: Bitmap::init(
                 BitmapBacking::ManuallyManaged(bitmap_slice),
-                (bits % 64) as u8,
+                placed.n_remainder,
             ),
-            bit_alignment: align_in_bits(alignment_of(range.start())),
+            bit_alignment: placed.max_alignment,
             free: range.size() / Small::SIZE,
         })
     }
@@ -219,12 +222,21 @@ where
 {
     fn allocate_fragment(&mut self) -> Result<Frame<S>, MemError> {
         for bitmap in self.bitmaps_for::<S>() {
-            if let Some(bitptr) = bitmap.bitmap.allocate(S::BITS, bitmap.bit_alignment) {
+            trace_disabled!(
+                "tmm.bitmap.phys.alloc_fragment",
+                "looking in bitmap with len {} and align {:x}",
+                bitmap.free,
+                bitmap.bit_alignment.as_usize()
+            );
+            if let Some(bitptr) = bitmap.bitmap.allocate(S::BITS, align_in_bits(S::ALIGNMENT)) {
+                trace_disabled!("tmm.bitmap.phys.alloc_fragment", "found free: {:?}", bitptr);
                 bitmap.free -= S::BITS;
                 let addr = bit_index_as_address(bitptr.bit_index(), bitmap.start);
                 return Ok(Frame::from_start_address(addr).unwrap());
             }
         }
+
+        trace_disabled!("tmm.bitmap.phys.alloc_fragment", "OOM!");
         Err(MemError::OutOfMemory)
     }
 
@@ -281,6 +293,55 @@ impl BitmapEntry {
 
     fn end(&self) -> PhysAddr {
         self.start + self.size()
+    }
+}
+
+#[derive(Debug)]
+struct EntryPlacement {
+    base: PhysAddr,
+    buf_layout: Layout,
+    n_entries: usize,
+    n_remainder: u8,
+    max_alignment: Alignment,
+}
+
+const N_HIGHER_FOR_BUMP: u64 = 12;
+
+impl EntryPlacement {
+    fn place(range: MemoryRange<PhysAddr>) -> Self {
+        let base_align = range.start_align();
+        let size = range.size();
+
+        let (new_base, new_align) = if size > Large::SIZE * N_HIGHER_FOR_BUMP {
+            (
+                align!(up, range.start().as_u64(), Large::SIZE),
+                Large::ALIGNMENT,
+            )
+        } else if size > Medium::SIZE * N_HIGHER_FOR_BUMP {
+            (
+                align!(up, range.start().as_u64(), Medium::SIZE),
+                Medium::ALIGNMENT,
+            )
+        } else {
+            (
+                align!(up, range.start().as_u64(), Small::SIZE),
+                Small::ALIGNMENT,
+            )
+        };
+
+        let skipped_bytes = new_base - range.start().as_u64();
+        let size = size - skipped_bytes;
+        let n_pages = n_pages_for_bytes(size);
+        let n_entries = entries_for_bytes(size);
+        let bit_align = align_in_bits(new_align);
+
+        Self {
+            base: PhysAddr::new(new_base),
+            buf_layout: Layout::array::<u64>(n_entries as usize).unwrap(),
+            n_entries: n_entries as usize,
+            n_remainder: (n_pages % 64) as u8,
+            max_alignment: bit_align,
+        }
     }
 }
 
